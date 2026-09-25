@@ -1,6 +1,6 @@
 # Design Phase
 
-## ✅ 1. System Architecture (VERY IMPORTANT)
+## ✅ 1. System Architecture 
 
 
 ```
@@ -8,7 +8,7 @@ User (Student)
       ↓
 Frontend (React UI)
       ↓
-Backend API (Node)
+Backend API (Node / FastAPI)
       ↓
 AI Engine (Scheduler Logic)
       ↓
@@ -20,7 +20,7 @@ Database (User Data + Tasks)
 
 ---
 
-## ✅ 2. Core Modules (Write This)
+## ✅ 2. Core Modules 
 
 Divide system into 5 parts :
 
@@ -49,7 +49,7 @@ Divide system into 5 parts :
 
 ---
 
-## ✅ 3. Basic Algorithm (MOST IMPORTANT AI PART)
+## ✅ 3. Basic Algorithm 
 
 
 ### 🔹 Step-Based Logic
@@ -76,7 +76,7 @@ Divide system into 5 parts :
 
 ---
 
-## ✅ 4. Sample Input & Output (SHOW THIS)
+## ✅ 4. Sample Input & Output 
 
 ### Input:
 
@@ -94,7 +94,7 @@ Day 4 → OS
 Day 5 → OS
 ```
 
-## ✅ 5. Database Design (Simple)
+## ✅ 5. Database Design
 
 Show 2 tables:
 
@@ -113,10 +113,9 @@ Show 2 tables:
 
 ---
 
-## ✅ 6. Tech Stack (Say This Clearly)
-
+## ✅ 6. Tech Stack 
 * Frontend → React
-* Backend → Node
+* Backend → Node / FastAPI
 * Database → MongoDB
 * AI Logic → Python
 
