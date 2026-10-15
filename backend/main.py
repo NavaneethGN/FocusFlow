@@ -1011,11 +1011,6 @@ def update_question_status(question_id: str, payload: Dict[str, Any], db: Sessio
         "status": q.status,
         "text": q.text,
     }
-        "success": True,
-        "concept": primary_concept,
-        "created_concepts": created_concepts,
-        "generated_questions": created_questions
-    }
 
 @app.get("/api/plan/today")
 def get_today_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
@@ -1554,8 +1549,6 @@ def legacy_schedule(request: LegacyScheduleRequest):
         "completion_percent": 100,
         "schedule": output,
         "priority_order": [t.subject for t in request.tasks],
-    }
-        "priority_order": [t.subject for t in request.tasks]
     }
 # Include HLR routers
 app.include_router(materials.router)
