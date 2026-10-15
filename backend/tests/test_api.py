@@ -160,3 +160,62 @@ def test_settings_endpoints(client):
     )
     assert put_res.status_code == 200
     assert put_res.json()["daily_minutes"] == 90
+
+
+def test_ai_status_endpoint(client):
+    res = client.get("/api/ai/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert "status" in data
+
+
+def test_ai_chat_endpoint(client):
+    res = client.post(
+        "/api/ai/chat",
+        json={
+            "message": "Why does memory decay exponentially?",
+            "history": [],
+            "subject": "Cognitive Science",
+            "persona": "socratic",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "reply" in data
+    assert len(data["reply"]) > 10
+    assert "suggested_followups" in data
+
+
+def test_ai_doubt_solver_endpoint(client):
+    res = client.post(
+        "/api/ai/solve-doubt",
+        json={
+            "doubt": "What is the difference between Write-Through and Write-Back caching?",
+            "subject": "Operating Systems",
+            "difficulty": "Medium",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "core_intuition" in data
+    assert len(data["step_by_step_solution"]) >= 1
+    assert "retention_hook" in data
+    assert "verification_challenge" in data
+
+
+def test_ai_mnemonics_endpoint(client):
+    res = client.post(
+        "/api/ai/mnemonics",
+        json={
+            "concept_name": "Raft Leader Election",
+            "topic": "Consensus",
+            "subject": "Distributed Systems",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "story_mnemonic" in data
+    assert "acronym_or_rhyme" in data
+    assert "flashcards" in data
+    assert len(data["flashcards"]) >= 1
+

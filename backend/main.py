@@ -2,7 +2,7 @@ import math
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI
@@ -420,7 +420,7 @@ app = FastAPI(
 )
 
 from app.core.config import settings
-from app.core.database import engine, Base, SessionLocal
+from app.core.database import engine, Base, SessionLocal, get_db
 from app.models.models import (
     User as DBUser,
     Subject as DBSubject,
@@ -434,7 +434,7 @@ from app.services.hlr import DEFAULT_LAUNCH_THETA, DEFAULT_FEATURE_SPEC
 from app.services.quiz_gen import generate_concepts_and_questions, explain_concept_with_gemini, test_gemini_connection
 
 # Routers
-from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router
+from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router, ai_features
 
 
 def seed_initial_data():
@@ -575,179 +575,18 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# API Endpoints
+# API Endpoints & Routers
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {
-        "status": "healthy",
+        "status": "ok",
+        "app": "FocusFlow HLR",
+        "version": "2.0.0",
         "engine": "Half-Life Regression (HLR)",
-        "concepts_count": len(db_concepts),
-        "questions_count": len(db_questions),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
-
-@app.get("/api/dashboard")
-def get_dashboard() -> Dict[str, Any]:
-    """Provides subject and concept strength roll-up, counts of weak and due concepts."""
-    concepts = list(db_concepts.values())
-    
-    # Recalculate dynamic delta and p_hat for now
-    total_p = 0.0
-    due_count = 0
-    weak_count = 0
-    
-    subjects_map: Dict[str, Dict[str, Any]] = {}
-    for c in concepts:
-        last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
-        c["delta_days"] = round(delta, 2)
-        c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
-        c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
-        
-        total_p += c["p_hat"]
-        if c["is_due"]:
-            due_count += 1
-        if c["p_hat"] < 0.65:
-            weak_count += 1
-            
-        subj = c["subject"]
-        if subj not in subjects_map:
-            subjects_map[subj] = {
-                "name": subj,
-                "concepts_count": 0,
-                "sum_p": 0.0,
-                "due_count": 0,
-                "weak_count": 0,
-                "priority": db_settings.subject_priorities.get(subj, 1.0),
-                "exam_date": db_settings.exam_dates.get(subj, "2026-10-15")
-            }
-        s = subjects_map[subj]
-        s["concepts_count"] += 1
-        s["sum_p"] += c["p_hat"]
-        if c["is_due"]:
-            s["due_count"] += 1
-        if c["p_hat"] < 0.65:
-            s["weak_count"] += 1
-
-    subjects_summary = []
-    for s in subjects_map.values():
-        avg_strength = round((s["sum_p"] / s["concepts_count"]) * 100, 1) if s["concepts_count"] > 0 else 0
-        subjects_summary.append({
-            "name": s["name"],
-            "strength_percent": avg_strength,
-            "avg_p": round(s["sum_p"] / s["concepts_count"], 3) if s["concepts_count"] > 0 else 0,
-            "concepts_count": s["concepts_count"],
-            "due_count": s["due_count"],
-            "weak_count": s["weak_count"],
-            "priority": s["priority"],
-            "exam_date": s["exam_date"],
-        })
-
-    overall_strength = round((total_p / len(concepts)) * 100, 1) if concepts else 0.0
-
-    # Sort weakest concepts to suggest immediate review
-    weakest_concepts = sorted(concepts, key=lambda item: item["p_hat"])[:4]
-
-    return {
-        "overall_retention_score": overall_strength,
-        "total_concepts": len(concepts),
-        "due_concepts_count": due_count,
-        "weak_concepts_count": weak_count,
-        "daily_study_goal_minutes": db_settings.daily_minutes,
-        "minutes_studied_today": 32,
-        "streak_days": 8,
-        "retention_threshold": db_settings.retention_threshold,
-        "subjects": subjects_summary,
-        "weakest_concepts": weakest_concepts,
-    }
-
-@app.get("/api/concepts")
-def get_concepts(subject: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Returns all concepts and their HLR states."""
-    concepts = list(db_concepts.values())
-    if subject:
-        concepts = [c for c in concepts if c["subject"].lower() == subject.lower()]
-    for c in concepts:
-        last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
-        c["delta_days"] = round(delta, 2)
-        c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
-        c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
-    return sorted(concepts, key=lambda item: item["p_hat"])
-
-@app.get("/api/concepts/{concept_id}/curve")
-def get_concept_curve(concept_id: str) -> Dict[str, Any]:
-    """Generates forgetting curve data points [0, 2*h] and practice points for Figure 4 chart."""
-    if concept_id not in db_concepts:
-        raise HTTPException(status_code=404, detail="Concept not found")
-    c = db_concepts[concept_id]
-    h = c["half_life_days"]
-    
-    # 35 sampling steps along the forgetting curve
-    max_days = max(8.0, round(h * 2.5, 1))
-    step = max_days / 34.0
-    
-    curve_points = []
-    for i in range(35):
-        d = round(i * step, 2)
-        p = recall_prob(h, d)
-        curve_points.append({
-            "delta_days": d,
-            "p_hat": round(p, 4),
-            "retention_pct": round(p * 100, 1),
-            "threshold": round(db_settings.retention_threshold * 100, 1)
-        })
-
-    last_dt = datetime.fromisoformat(c["last_practiced_at"])
-    curr_delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
-    current_p = recall_prob(h, curr_delta)
-    
-    practice_points = db_practice_history.get(concept_id, [])
-
-    return {
-        "concept": c,
-        "half_life_days": h,
-        "current_delta_days": round(curr_delta, 2),
-        "current_p_hat": round(current_p, 4),
-        "threshold": db_settings.retention_threshold,
-        "curve_points": curve_points,
-        "practice_points": practice_points,
-        "model_spec": {
-            "theta": LAUNCH_THETA,
-            "x": [1.0, c["n_right"], c["n_wrong"]],
-            "formula": "h = 2^(θ0 + θ_right * n_right + θ_wrong * n_wrong)"
-        }
-    }
-
-@app.get("/api/questions")
-def get_questions(
-    concept_id: Optional[str] = None,
-    subject: Optional[str] = None,
-    status: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """List questions with optional filters."""
-    res = db_questions
-    if concept_id:
-        res = [q for q in res if q["concept_id"] == concept_id]
-    if subject:
-        res = [q for q in res if q["subject"].lower() == subject.lower()]
-    if status:
-        res = [q for q in res if q["status"] == status]
-    return res
-
-@app.patch("/api/questions/{question_id}")
-def update_question_status(question_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Approve or flag a question."""
-    for q in db_questions:
-        if q["id"] == question_id:
-            if "status" in payload:
-                q["status"] = payload["status"]
-            if "text" in payload:
-                q["text"] = payload["text"]
-            return q
-    raise HTTPException(status_code=404, detail="Question not found")
 
 @app.get("/api/ai/status")
 async def get_ai_status():
@@ -759,362 +598,55 @@ async def explain_concept(req: ExplainRequest) -> Dict[str, Any]:
     """Provides cognitive breakdown, mental models, mnemonics, and real-world analogies using Gemini."""
     return await explain_concept_with_gemini(req.concept_name, req.topic, req.context)
 
-@app.post("/api/materials")
-async def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
-    """Upload study notes, extract concepts and synthesize questions using Gemini AI."""
-    # 1. Primary concept
-    primary_concept_id = f"c-{uuid.uuid4().hex[:6]}"
-    primary_concept = {
-        "id": primary_concept_id,
-        "subject": req.subject,
-        "topic": req.topic,
-        "name": req.title,
-        "difficulty": "Medium",
-        "n_right": 0,
-        "n_wrong": 0,
-        "last_practiced_at": datetime.now(timezone.utc).isoformat(),
-        "half_life_days": 1.0,
-        "p_hat": 0.99,
-        "next_review_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-        "is_due": False,
-        "delta_days": 0.0
-    }
-    db_concepts[primary_concept_id] = primary_concept
-
-    # 2. Extract concepts & questions via Gemini (with fallback)
-    extracted = await generate_concepts_and_questions(req.title, req.content)
-    
-    created_questions = []
-    created_concepts = [primary_concept]
-
-    for item in extracted:
-        c_name = item.get("name", req.title)
-        if c_name.strip() and c_name.lower() != req.title.lower():
-            sub_id = f"c-{uuid.uuid4().hex[:6]}"
-            sub_c = {
-                "id": sub_id,
-                "subject": req.subject,
-                "topic": req.topic,
-                "name": c_name,
-                "difficulty": "Medium",
-                "n_right": 0,
-                "n_wrong": 0,
-                "last_practiced_at": datetime.now(timezone.utc).isoformat(),
-                "half_life_days": 1.0,
-                "p_hat": 0.95,
-                "next_review_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
-                "is_due": False,
-                "delta_days": 0.0
-            }
-            db_concepts[sub_id] = sub_c
-            created_concepts.append(sub_c)
-            target_id = sub_id
-        else:
-            target_id = primary_concept_id
-
-        for q in item.get("questions", []):
-            q_id = f"q-{uuid.uuid4().hex[:6]}"
-            new_q = {
-                "id": q_id,
-                "concept_id": target_id,
-                "concept_name": c_name,
-                "subject": req.subject,
-                "text": q.get("text", f"Key assessment on {c_name}?"),
-                "options": q.get("options", ["Correct option", "Distractor 1", "Distractor 2", "Distractor 3"]),
-                "answer_index": q.get("answer_index", 0),
-                "explanation": q.get("explanation", f"Based on notes for {c_name}."),
-                "status": "approved",
-                "source": item.get("source", "gemini")
-            }
-            db_questions.insert(0, new_q)
-            created_questions.append(new_q)
-
-    # Fallback if no questions were parsed
-    if not created_questions:
-        fallback_q = {
-            "id": f"q-{uuid.uuid4().hex[:6]}",
-            "concept_id": primary_concept_id,
-            "concept_name": req.title,
-            "subject": req.subject,
-            "text": f"What is the primary cognitive objective of '{req.title}'?",
-            "options": [
-                f"Establishing foundational principles for {req.title}",
-                "Introducing arbitrary constraints without verification",
-                "Deprecating previous knowledge without retention tracking",
-                "Static manual reconciliation"
-            ],
-            "answer_index": 0,
-            "explanation": f"Understanding {req.title} provides foundational mastery of {req.topic}.",
-            "status": "approved"
+@app.get("/api/questions")
+def get_all_questions(
+    concept_id: Optional[int] = None,
+    subject: Optional[str] = None,
+    status: Optional[str] = None,
+    db: SessionLocal = Depends(get_db)
+):
+    """List questions with optional filters from database."""
+    query = db.query(DBQuestion)
+    if concept_id:
+        query = query.filter(DBQuestion.concept_id == concept_id)
+    if status:
+        query = query.filter(DBQuestion.status == status)
+    results = query.all()
+    return [
+        {
+            "id": f"q-{q.id}",
+            "question_id": q.id,
+            "concept_id": str(q.concept_id),
+            "concept_name": q.concept.name if q.concept else "General",
+            "subject": q.concept.subject.name if q.concept and q.concept.subject else "General",
+            "text": q.text,
+            "options": q.options,
+            "answer_index": q.answer_index,
+            "explanation": q.explanation,
+            "status": q.status,
         }
-        db_questions.insert(0, fallback_q)
-        created_questions.append(fallback_q)
+        for q in results
+    ]
 
+@app.patch("/api/questions/{question_id}")
+def update_question_status(question_id: str, payload: Dict[str, Any], db: SessionLocal = Depends(get_db)):
+    """Approve or flag a question."""
+    q_id = int(question_id.replace("q-", "")) if question_id.replace("q-", "").isdigit() else 1
+    q = db.query(DBQuestion).filter(DBQuestion.id == q_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if "status" in payload:
+        q.status = payload["status"]
+    if "text" in payload:
+        q.text = payload["text"]
+    db.commit()
+    db.refresh(q)
     return {
-        "success": True,
-        "concept": primary_concept,
-        "created_concepts": created_concepts,
-        "generated_questions": created_questions
+        "id": f"q-{q.id}",
+        "question_id": q.id,
+        "status": q.status,
+        "text": q.text,
     }
-
-@app.get("/api/plan/today")
-def get_today_plan() -> Dict[str, Any]:
-    """
-    HLR Scheduler (Section 5):
-    1. Load concept_state for concepts due or low p_hat inside the window.
-    2. Split daily minutes across subjects, weighted by due count and (1 - avg p_hat).
-    3. Within a subject, fill with lowest-p_hat concepts.
-    4. Capped slot for new/revision concepts.
-    """
-    concepts = list(db_concepts.values())
-    for c in concepts:
-        last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
-        c["delta_days"] = round(delta, 2)
-        c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
-        c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
-
-    daily_mins = db_settings.daily_minutes
-    subjects = list(set(c["subject"] for c in concepts))
-    
-    # Calculate subject urgency = priority * (1.0 - avg_p + 0.3 * due_ratio)
-    subject_weights = {}
-    for subj in subjects:
-        subj_concepts = [c for c in concepts if c["subject"] == subj]
-        avg_p = sum(c["p_hat"] for c in subj_concepts) / len(subj_concepts) if subj_concepts else 0.8
-        due_ratio = sum(1 for c in subj_concepts if c["is_due"]) / len(subj_concepts) if subj_concepts else 0.0
-        priority_multiplier = db_settings.subject_priorities.get(subj, 1.0)
-        urgency = priority_multiplier * ((1.0 - avg_p) * 2.0 + due_ratio + 0.2)
-        subject_weights[subj] = max(0.1, urgency)
-
-    total_weight = sum(subject_weights.values()) or 1.0
-    
-    blocks = []
-    total_allocated_minutes = 0
-    
-    for subj in subjects:
-        subj_concepts = [c for c in concepts if c["subject"] == subj]
-        # Rank by lowest p_hat first (hardest/most forgotten concepts first)
-        ranked = sorted(subj_concepts, key=lambda item: item["p_hat"])
-        
-        weight = subject_weights[subj]
-        allocated_mins = max(10, round((weight / total_weight) * daily_mins / 5.0) * 5)
-        total_allocated_minutes += allocated_mins
-        
-        # Pick concepts fitting in this block (~5-7 mins per concept)
-        num_concepts_to_review = max(1, min(len(ranked), allocated_mins // 7))
-        target_concepts = ranked[:num_concepts_to_review]
-        
-        # Questions count for quiz
-        q_count = len([q for q in db_questions if any(q["concept_id"] == tc["id"] for tc in target_concepts)])
-        
-        blocks.append({
-            "id": f"block-{subj.lower().replace(' ', '-')}",
-            "subject": subj,
-            "allocated_minutes": allocated_mins,
-            "estimated_questions": max(3, min(10, q_count or 4)),
-            "avg_p_hat": round(sum(c["p_hat"] for c in target_concepts) / len(target_concepts), 3) if target_concepts else 0.8,
-            "concepts": target_concepts,
-            "status": "ready"
-        })
-
-    # Sort blocks by subject priority & lowest retention
-    blocks = sorted(blocks, key=lambda b: b["avg_p_hat"])
-
-    return {
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "daily_minutes_goal": daily_mins,
-        "total_scheduled_minutes": total_allocated_minutes,
-        "due_concepts_total": sum(1 for c in concepts if c["is_due"]),
-        "blocks": blocks,
-        "scheduler_algorithm": "HLR Weighted Memory Gradient Optimization"
-    }
-
-@app.get("/api/plan/week")
-def get_week_plan() -> Dict[str, Any]:
-    """Generates 7-day adaptive forecast based on current half-lives."""
-    days = []
-    today = datetime.now(timezone.utc)
-    for i in range(7):
-        day_date = today + timedelta(days=i)
-        # forecast concepts that will fall below threshold at day i
-        due_on_day = []
-        for c in db_concepts.values():
-            h = c["half_life_days"]
-            last_dt = datetime.fromisoformat(c["last_practiced_at"])
-            projected_delta = (day_date - last_dt).total_seconds() / 86400.0
-            projected_p = recall_prob(h, projected_delta)
-            if projected_p <= db_settings.retention_threshold:
-                due_on_day.append({"name": c["name"], "subject": c["subject"], "p_hat": round(projected_p, 3)})
-                
-        days.append({
-            "day_index": i,
-            "date": day_date.strftime("%Y-%m-%d"),
-            "weekday": day_date.strftime("%A"),
-            "planned_minutes": db_settings.daily_minutes if i < 5 else max(25, db_settings.daily_minutes - 15),
-            "due_count": len(due_on_day),
-            "concepts": due_on_day[:3]
-        })
-        
-    return {
-        "week_start": today.strftime("%Y-%m-%d"),
-        "days": days
-    }
-
-@app.post("/api/quizzes/start")
-def start_quiz(req: StartQuizRequest) -> Dict[str, Any]:
-    """Pick tailored questions for a quiz session based on target subject or due concepts."""
-    eligible_questions = list(db_questions)
-    if req.subject:
-        eligible_questions = [q for q in eligible_questions if q["subject"].lower() == req.subject.lower()]
-    if req.concept_id:
-        eligible_questions = [q for q in eligible_questions if q["concept_id"] == req.concept_id]
-
-    if not eligible_questions:
-        eligible_questions = list(db_questions)
-
-    # Sort questions prioritizing lowest concept p_hat
-    def get_q_priority(q):
-        c = db_concepts.get(q["concept_id"])
-        return c["p_hat"] if c else 0.5
-
-    ranked_q = sorted(eligible_questions, key=get_q_priority)
-    selected = ranked_q[:req.limit]
-
-    session_id = f"sess-{uuid.uuid4().hex[:8]}"
-    db_sessions[session_id] = {
-        "id": session_id,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "questions": selected,
-        "attempts": []
-    }
-
-    return {
-        "session_id": session_id,
-        "questions": selected,
-        "total_questions": len(selected)
-    }
-
-@app.post("/api/sessions/{session_id}/answers")
-def record_answer(session_id: str, req: SessionAnswerRequest) -> Dict[str, Any]:
-    """Records an answered question event idempotently."""
-    attempt_record = req.dict()
-    attempt_record["recorded_at"] = datetime.now(timezone.utc).isoformat()
-    db_attempts.append(attempt_record)
-    
-    if session_id in db_sessions:
-        db_sessions[session_id]["attempts"].append(attempt_record)
-        
-    # Return instantaneous HLR feedback for the answered concept
-    c = db_concepts.get(req.concept_id)
-    if c:
-        old_h = c["half_life_days"]
-        # Fast preview of half-life update: correct multiplies h, wrong reduces it
-        projected_h = half_life(
-            LAUNCH_THETA,
-            [1.0, float(c["n_right"] + (1 if req.is_correct else 0)), float(c["n_wrong"] + (0 if req.is_correct else 1))]
-        )
-        return {
-            "recorded": True,
-            "event_id": req.event_id,
-            "is_correct": req.is_correct,
-            "old_half_life": old_h,
-            "projected_half_life": round(projected_h, 3),
-            "h_change_pct": round(((projected_h - old_h) / old_h) * 100, 1)
-        }
-
-    return {"recorded": True, "event_id": req.event_id}
-
-@app.post("/api/sessions/{session_id}/complete")
-def complete_session(session_id: str) -> Dict[str, Any]:
-    """
-    Session close (Section 5 per concept):
-    1. p = correct / attempts in the session.
-    2. Delta = now - last_practiced_at.
-    3. Save training_record(p, Delta, x_before).
-    4. Update counts, compute h_hat with active Theta, and set next_review_at.
-    """
-    sess = db_sessions.get(session_id)
-    attempts = sess["attempts"] if sess else [a for a in db_attempts[-5:]]
-    
-    now_dt = datetime.now(timezone.utc)
-    concept_stats: Dict[str, Dict[str, int]] = {}
-    for a in attempts:
-        cid = a["concept_id"]
-        if cid not in concept_stats:
-            concept_stats[cid] = {"correct": 0, "total": 0}
-        concept_stats[cid]["total"] += 1
-        if a["is_correct"]:
-            concept_stats[cid]["correct"] += 1
-
-    updates = []
-    for cid, stats in concept_stats.items():
-        if cid not in db_concepts:
-            continue
-        c = db_concepts[cid]
-        p_session = stats["correct"] / stats["total"]
-        
-        last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta_days = max(0.01, (now_dt - last_dt).total_seconds() / 86400.0)
-        
-        old_h = c["half_life_days"]
-        
-        # Update counts
-        c["n_right"] += stats["correct"]
-        c["n_wrong"] += (stats["total"] - stats["correct"])
-        c["last_practiced_at"] = now_dt.isoformat()
-        
-        # Compute new half_life
-        new_x = [1.0, float(c["n_right"]), float(c["n_wrong"])]
-        new_h = half_life(LAUNCH_THETA, new_x)
-        c["half_life_days"] = round(new_h, 3)
-        c["p_hat"] = 0.99  # immediately after practice, recall is near maximum
-        
-        # Next review
-        review_days = next_review_days(new_h, db_settings.retention_threshold)
-        next_dt = now_dt + timedelta(days=review_days)
-        c["next_review_at"] = next_dt.isoformat()
-        c["is_due"] = False
-        
-        # Save training record and add point to practice history
-        if cid not in db_practice_history:
-            db_practice_history[cid] = []
-        db_practice_history[cid].append({
-            "delta_days": round(delta_days, 2),
-            "p_observed": round(p_session, 2),
-            "p_hat": round(recall_prob(old_h, delta_days), 3),
-            "type": f"Session {session_id[-4:]}",
-            "date": now_dt.strftime("%b %d, %H:%M")
-        })
-
-        updates.append({
-            "concept_id": cid,
-            "concept_name": c["name"],
-            "subject": c["subject"],
-            "session_score": f"{stats['correct']}/{stats['total']}",
-            "old_half_life": old_h,
-            "new_half_life": round(new_h, 3),
-            "next_review_days": round(review_days, 1),
-            "next_review_date": next_dt.strftime("%b %d")
-        })
-
-    return {
-        "success": True,
-        "session_id": session_id,
-        "completed_at": now_dt.isoformat(),
-        "total_attempts": len(attempts),
-        "concept_updates": updates
-    }
-
-@app.get("/api/settings")
-def get_settings() -> UserSettings:
-    return db_settings
-
-@app.put("/api/settings")
-def update_settings(settings: UserSettings) -> UserSettings:
-    global db_settings
-    db_settings = settings
-    return db_settings
 
 @app.get("/api/models")
 def get_models() -> Dict[str, Any]:
@@ -1145,25 +677,35 @@ def get_models() -> Dict[str, Any]:
         ]
     }
 
-# ---------------------------------------------------------------------------
-# Backwards-compatibility for existing schedule endpoint if called
-# ---------------------------------------------------------------------------
+# Include HLR routers
+app.include_router(materials.router)
+app.include_router(concepts.router)
+app.include_router(quizzes.router)
+app.include_router(sessions.router)
+app.include_router(dashboard.router)
+app.include_router(plan.router)
+app.include_router(settings_router.router)
+app.include_router(ai_features.router)
+
+# -------------------------------------------------------------
+# Backwards compatibility: Legacy heuristic timetable endpoint
+# -------------------------------------------------------------
 class LegacyTask(BaseModel):
     id: Optional[int] = None
-    subject: str
-    deadline_days: int = 3
-    difficulty: Literal["Easy", "Medium", "Hard"] = "Medium"
+    subject: str = Field(min_length=1, max_length=60)
+    deadline_days: int = Field(default=3, ge=1, le=30)
+    difficulty: str = "Medium"
     status: str = "Planned"
 
 class LegacyTimeSlot(BaseModel):
-    day: int
+    day: int = Field(ge=0, le=30)
     start: str
     end: str
 
 class LegacyScheduleRequest(BaseModel):
-    tasks: List[LegacyTask]
-    available_slots: List[LegacyTimeSlot]
-    locked_schedule: List[Dict[str, Any]] = []
+    tasks: List[LegacyTask] = Field(min_length=1)
+    available_slots: List[LegacyTimeSlot] = Field(min_length=1)
+    locked_schedule: List[Dict[str, Any]] = Field(default_factory=list)
 
 @app.post("/api/schedule")
 def legacy_schedule(request: LegacyScheduleRequest):
@@ -1181,58 +723,10 @@ def legacy_schedule(request: LegacyScheduleRequest):
             "status": task.status
         })
     return {
-        "generated_on": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "generated_on": datetime.now(timezone.utc).date().isoformat(),
         "total_slots": len(request.available_slots),
         "scheduled_slots": len(output),
         "completion_percent": 100,
         "schedule": output,
-        "priority_order": [t.subject for t in request.tasks]
-    }
-# Include HLR routers
-app.include_router(materials.router)
-app.include_router(concepts.router)
-app.include_router(quizzes.router)
-app.include_router(sessions.router)
-app.include_router(dashboard.router)
-app.include_router(plan.router)
-app.include_router(settings_router.router)
-
-
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "app": "FocusFlow HLR", "version": "2.0.0"}
-
-
-# -------------------------------------------------------------
-# Backwards compatibility: Legacy heuristic timetable endpoint
-# -------------------------------------------------------------
-class LegacyTask(BaseModel):
-    id: int | None = None
-    subject: str = Field(min_length=1, max_length=60)
-    deadline_days: int = Field(ge=1, le=30)
-    difficulty: str
-    status: str = "Planned"
-
-
-class LegacyTimeSlot(BaseModel):
-    day: int = Field(ge=0, le=30)
-    start: str
-    end: str
-
-
-class LegacyScheduleRequest(BaseModel):
-    tasks: list[LegacyTask] = Field(min_length=1)
-    available_slots: list[LegacyTimeSlot] = Field(min_length=1)
-    locked_schedule: list[dict] = Field(default_factory=list)
-
-
-@app.post("/api/schedule")
-def legacy_schedule(request: LegacyScheduleRequest):
-    return {
-        "generated_on": datetime.now(timezone.utc).date().isoformat(),
-        "total_slots": len(request.available_slots),
-        "scheduled_slots": len(request.available_slots),
-        "completion_percent": 100,
-        "schedule": [],
         "priority_order": [t.subject for t in request.tasks],
     }

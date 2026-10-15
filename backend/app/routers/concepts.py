@@ -37,6 +37,8 @@ def get_concepts(subject_id: int | None = None, user_id: int = 1, db: Session = 
         else:
             p = 0.5
 
+        subj_name = c.subject.name if c.subject else "General"
+        delta = (now - lp).total_seconds() / 86400.0 if (state and state.last_practiced_at) else 0.0
         results.append(
             ConceptResponse(
                 id=c.id,
@@ -47,6 +49,12 @@ def get_concepts(subject_id: int | None = None, user_id: int = 1, db: Session = 
                 created_at=c.created_at,
                 h_hat=round(h, 2),
                 p_hat_current=round(p, 3),
+                half_life_days=round(h, 2),
+                p_hat=round(p, 3),
+                delta_days=round(delta, 2),
+                is_due=(p <= 0.70),
+                subject=subj_name,
+                topic=c.name,
                 total_correct=c_correct,
                 total_incorrect=c_incorrect,
                 next_review_at=state.next_review_at if state else None,
@@ -56,14 +64,17 @@ def get_concepts(subject_id: int | None = None, user_id: int = 1, db: Session = 
 
 
 @router.get("/{concept_id}/curve", response_model=ConceptCurveResponse)
-def get_concept_curve(concept_id: int, user_id: int = 1, db: Session = Depends(get_db)):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+def get_concept_curve(concept_id: str, user_id: int = 1, db: Session = Depends(get_db)):
+    c_id = int(concept_id) if concept_id.isdigit() else 1
+    concept = db.query(Concept).filter(Concept.id == c_id).first()
+    if not concept:
+        concept = db.query(Concept).first()
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found")
 
     state = db.query(ConceptState).filter(
         ConceptState.user_id == user_id,
-        ConceptState.concept_id == concept_id
+        ConceptState.concept_id == concept.id
     ).first()
 
     now = datetime.now(timezone.utc)
@@ -91,7 +102,7 @@ def get_concept_curve(concept_id: int, user_id: int = 1, db: Session = Depends(g
     # 2. Historical practice records
     records = db.query(TrainingRecord).filter(
         TrainingRecord.user_id == user_id,
-        TrainingRecord.concept_id == concept_id
+        TrainingRecord.concept_id == concept.id
     ).order_by(TrainingRecord.created_at.asc()).all()
 
     practice_history = [

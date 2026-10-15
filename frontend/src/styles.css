@@ -800,3 +800,293 @@ button {
     overflow-x: auto;
   }
 }
+
+/* ==========================================================================
+   AI Features: Chatbot, Doubt Solver & Mnemonic Lab
+   ========================================================================== */
+
+/* Persona Selector */
+.persona-selector {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.persona-pill {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  background: var(--paper-elevated);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.persona-pill:hover {
+  border-color: var(--mint-dark);
+  color: var(--ink);
+}
+
+.persona-pill.active {
+  background: var(--mint-bg);
+  border-color: var(--mint);
+  color: var(--mint-dark);
+}
+
+/* Chat Layout */
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 190px);
+  min-height: 520px;
+  border-radius: var(--radius-md);
+  background: var(--paper-elevated);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.chat-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chat-feed {
+  flex: 1;
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: radial-gradient(circle at 95% 5%, #faf8f3 0, transparent 40%), var(--paper);
+}
+
+.chat-msg-row {
+  display: flex;
+  gap: 10px;
+  max-width: 85%;
+}
+
+.chat-msg-row.user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.chat-msg-row.ai {
+  align-self: flex-start;
+}
+
+.chat-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.chat-avatar.user-av {
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.chat-avatar.ai-av {
+  background: var(--mint-bg);
+  color: var(--mint-dark);
+  border: 1px solid var(--mint);
+}
+
+.chat-bubble {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chat-bubble.user {
+  background: var(--ink);
+  color: #ffffff;
+  border-top-right-radius: 2px;
+}
+
+.chat-bubble.ai {
+  background: #ffffff;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 3px rgba(36, 49, 46, 0.04);
+  border-top-left-radius: 2px;
+}
+
+.chat-meta {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-chip-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chat-suggestion-chip {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--mint-bg);
+  border: 1px solid #c8e4d3;
+  color: var(--mint-dark);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.chat-suggestion-chip:hover {
+  background: #cce9d8;
+  transform: translateY(-1px);
+}
+
+.chat-input-bar {
+  padding: 12px 16px;
+  background: #ffffff;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.chat-input-field {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chat-input-field:focus {
+  outline: 1px solid var(--mint-dark);
+  border-color: var(--mint-dark);
+  background: #ffffff;
+}
+
+/* Doubt Solver Cards */
+.doubt-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.solution-box {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 20px;
+}
+
+.step-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--mint-dark);
+  color: #ffffff;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.pitfall-box {
+  background: var(--coral-bg);
+  border: 1px solid #f2cfc7;
+  border-radius: var(--radius-md);
+  padding: 16px;
+  color: var(--coral-dark);
+}
+
+.retention-hook-box {
+  background: var(--mint-bg);
+  border: 1px solid var(--mint);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  color: var(--mint-dark);
+}
+
+/* Mnemonic & Flashcard Studio */
+.mnemonic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.flashcard-card {
+  perspective: 1000px;
+  height: 200px;
+  cursor: pointer;
+}
+
+.flashcard-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transform-style: preserve-3d;
+}
+
+.flashcard-inner.flipped {
+  transform: rotateY(180deg);
+}
+
+.flashcard-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  border-radius: var(--radius-md);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+}
+
+.flashcard-front {
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.flashcard-back {
+  background: var(--mint-bg);
+  color: var(--ink);
+  transform: rotateY(180deg);
+  border-color: var(--mint);
+}
+

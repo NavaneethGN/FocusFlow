@@ -130,8 +130,43 @@ def generate_study_plan(db: Session, user_id: int, days_count: int = 1) -> PlanR
         )
         concepts_pool = remaining_pool
 
+    # Build blocks for frontend compatibility
+    first_day_concepts = daily_plans[0].concepts if daily_plans else []
+    blocks_by_subj: Dict[str, list] = {}
+    for ci in first_day_concepts:
+        if ci.subject_name not in blocks_by_subj:
+            blocks_by_subj[ci.subject_name] = []
+        blocks_by_subj[ci.subject_name].append({
+            "id": ci.concept_id,
+            "name": ci.concept_name,
+            "subject": ci.subject_name,
+            "p_hat": ci.current_p,
+            "half_life_days": ci.h_hat,
+            "allocated_minutes": ci.allocated_minutes
+        })
+
+    blocks = [
+        {
+            "id": f"block-{s.lower().replace(' ', '-')}",
+            "subject": s,
+            "allocated_minutes": sum(c["allocated_minutes"] for c in clist),
+            "estimated_questions": len(clist) * 2,
+            "avg_p_hat": round(sum(c["p_hat"] for c in clist) / len(clist), 3) if clist else 0.5,
+            "concepts": clist,
+        }
+        for s, clist in blocks_by_subj.items()
+    ]
+
+    total_sched = sum(b["allocated_minutes"] for b in blocks)
+    due_total = sum(1 for c in evaluated_concepts if c["status"] in ("critical", "due"))
+
     return PlanResponse(
         generated_at=now,
         daily_budget_minutes=daily_budget,
         plan=daily_plans,
+        date=now.strftime("%Y-%m-%d"),
+        daily_minutes_goal=daily_budget,
+        total_scheduled_minutes=total_sched,
+        due_concepts_total=due_total,
+        blocks=blocks,
     )

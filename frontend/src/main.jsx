@@ -28,7 +28,14 @@ import {
   Award,
   Zap,
   ChevronRight,
-  Database
+  Database,
+  MessageSquare,
+  Bot,
+  Send,
+  Lightbulb,
+  Copy,
+  CheckCheck,
+  RefreshCw
 } from 'lucide-react';
 import './styles.css';
 
@@ -295,6 +302,238 @@ export default function App() {
   const [questionFilter, setQuestionFilter] = useState('all');
 
   const [simulatedDelta, setSimulatedDelta] = useState(2.5);
+
+  // ---------------------------------------------------------------------------
+  // AI Study Features State & Handlers
+  // ---------------------------------------------------------------------------
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: 'model',
+      content: "Hello! I am your **FocusFlow Socratic Study Buddy**. I'm here to test your understanding, deconstruct challenging logic, and help you lock concepts into long-term memory. What would you like to master today?",
+      timestamp: 'Just now',
+      followups: [
+        "Quiz me on my weakest concept",
+        "Why does recall probability decay exponentially (2^-Δ/h)?",
+        "Explain Raft Leader Election in 3 simple steps"
+      ]
+    }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatPersona, setChatPersona] = useState('socratic');
+  const [chatSubject, setChatSubject] = useState('All');
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const [doubtInput, setDoubtInput] = useState('');
+  const [doubtSubject, setDoubtSubject] = useState('Operating Systems');
+  const [doubtConcept, setDoubtConcept] = useState('');
+  const [doubtDifficulty, setDoubtDifficulty] = useState('Medium');
+  const [doubtLoading, setDoubtLoading] = useState(false);
+  const [doubtResult, setDoubtResult] = useState(null);
+  const [selectedChallengeOption, setSelectedChallengeOption] = useState(null);
+
+  const [mnemonicConcept, setMnemonicConcept] = useState('Raft Leader Election & Term Logic');
+  const [mnemonicSubject, setMnemonicSubject] = useState('Distributed Systems');
+  const [mnemonicLoading, setMnemonicLoading] = useState(false);
+  const [mnemonicResult, setMnemonicResult] = useState(null);
+  const [flippedCards, setFlippedCards] = useState({});
+  const [copiedMnemonic, setCopiedMnemonic] = useState(false);
+
+  async function handleSendChatMessage(textToSend = null) {
+    const text = (textToSend || chatInput).trim();
+    if (!text || chatLoading) return;
+
+    const userMsg = {
+      role: 'user',
+      content: text,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatInput('');
+    setChatLoading(true);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/ai/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: text,
+            history: chatMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
+            subject: chatSubject === 'All' ? null : chatSubject,
+            persona: chatPersona
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setChatMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              content: data.reply,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              followups: data.suggested_followups || [],
+              aiPowered: data.ai_powered
+            }
+          ]);
+          setChatLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Chat request fallback', e);
+    }
+
+    // Client-side local fallback
+    setTimeout(() => {
+      const fallbackReplies = {
+        socratic: `That's an insightful question about **${chatSubject === 'All' ? 'your studies' : chatSubject}**! Notice how active recall strengthens memory half-life: What do you predict happens to recall probability if we wait twice as long before reviewing?`,
+        exam_prep: `### Exam High-Yield Summary\n- **Key Invariant:** Under exam conditions, always identify the baseline state transition first.\n- **Duolingo HLR Principle:** Each correct review doubles estimated half-life (h), pushing the forgetting threshold further into the future.\n- **Common Trap:** Do not assume linear degradation; retention decays exponentially as 2^(-Δ/h).`,
+        eli5: `Think of this like riding a bicycle: The first time you learn, you wobble. But each time you practice right before you forget, your brain builds stronger muscle memory so you can ride longer without falling!`
+      };
+      setChatMessages(prev => [
+        ...prev,
+        {
+          role: 'model',
+          content: fallbackReplies[chatPersona] || fallbackReplies.socratic,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          followups: [
+            "Can you test me on this concept?",
+            "What is a real-world software example?",
+            "How does this connect to my study plan?"
+          ],
+          aiPowered: false
+        }
+      ]);
+      setChatLoading(false);
+    }, 600);
+  }
+
+  async function handleSolveDoubt(presetDoubt = null) {
+    const text = (presetDoubt || doubtInput).trim();
+    if (!text || doubtLoading) return;
+
+    if (presetDoubt) setDoubtInput(presetDoubt);
+    setDoubtLoading(true);
+    setSelectedChallengeOption(null);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/ai/solve-doubt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            doubt: text,
+            subject: doubtSubject,
+            difficulty: doubtDifficulty,
+            concept_context: doubtConcept || null
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setDoubtResult(data);
+          setDoubtLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Doubt solver fallback', e);
+    }
+
+    // Client-side local fallback
+    setTimeout(() => {
+      setDoubtResult({
+        doubt: text,
+        subject: doubtSubject,
+        core_intuition: `When dealing with "${text}", the central concept is maintaining correct state transitions across computational boundaries without incurring unbounded latency.`,
+        step_by_step_solution: [
+          `Identify the system constraints and initial preconditions for ${doubtSubject}.`,
+          `Analyze why conventional approaches fail: state updates must preserve transactional consistency.`,
+          `Apply the optimal resolution: utilize deterministic synchronization and track retention checkpoints.`
+        ],
+        common_pitfalls: [
+          "Assuming operations complete in zero-latency without evaluating network/cache bounds.",
+          "Ignoring edge conditions when concurrent updates occur simultaneously."
+        ],
+        retention_hook: "Core Rule: State before + verified transition = reliable post-condition.",
+        verification_challenge: {
+          question: `In ${doubtSubject}, what is the decisive advantage of adhering to this principle?`,
+          options: [
+            "Guarantees deterministic correctness across all failure modes",
+            "Eliminates the need for any verification or tests",
+            "Forces all operations to run sequentially on a single thread",
+            "Deprecates memory management entirely"
+          ],
+          answer_index: 0,
+          explanation: "Deterministic correctness under failure modes is the primary engineering guarantee."
+        },
+        ai_powered: false
+      });
+      setDoubtLoading(false);
+    }, 700);
+  }
+
+  async function handleGenerateMnemonic(cName = null, sName = null) {
+    const targetConcept = cName || mnemonicConcept;
+    const targetSubject = sName || mnemonicSubject;
+    if (!targetConcept || mnemonicLoading) return;
+
+    setMnemonicLoading(true);
+    setFlippedCards({});
+    setCopiedMnemonic(false);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/ai/mnemonics`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            concept_name: targetConcept,
+            subject: targetSubject
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setMnemonicResult(data);
+          setMnemonicLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Mnemonic fallback', e);
+    }
+
+    // Client-side local fallback
+    setTimeout(() => {
+      setMnemonicResult({
+        concept_name: targetConcept,
+        subject: targetSubject,
+        story_mnemonic: `Imagine walking into a master library. At the entrance stands a clockwork automaton for "${targetConcept}". Every time a query arrives, it pulls a single lever, instantly illuminating the exact shelf so you never have to wander through dark corridors.`,
+        acronym_or_rhyme: "Remember RAPID: Retrieve Actively, Prevent Invariant Decay!",
+        real_world_metaphor: `Think of ${targetConcept} like an express toll tag on a highway: instead of stopping at every single toll booth, the car is identified at highway speed, keeping traffic fluid and predictable.`,
+        key_takeaway: `Understanding ${targetConcept} anchors your mental framework in ${targetSubject} and preserves long-term memory half-life.`,
+        flashcards: [
+          {
+            front: `What core invariant is established by ${targetConcept}?`,
+            back: `It guarantees predictability and bounded execution time across all state transitions.`,
+            hint: "Consider reliability and stability."
+          },
+          {
+            front: `How does testing ${targetConcept} actively affect its memory half-life (h)?`,
+            back: `According to the Settles & Meeder (2016) HLR model, each successful active recall doubles the half-life h.`,
+            hint: "Think 2^(theta * x)."
+          },
+          {
+            front: `What is the risk of delaying reviews for ${targetConcept}?`,
+            back: `Recall probability drops exponentially (p = 2^(-Δ/h)). Once below the 0.70 threshold, mastery is lost.`,
+            hint: "Ebbinghaus forgetting curve."
+          }
+        ],
+        ai_powered: false
+      });
+      setMnemonicLoading(false);
+    }, 700);
+  }
 
   // ---------------------------------------------------------------------------
   // Data Fetching & Sync
@@ -762,6 +1001,24 @@ export default function App() {
               <Zap size={14} /> Quiz Mode
             </button>
             <button
+              className={`nav-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
+              onClick={() => setActiveTab('chat')}
+            >
+              <MessageSquare size={14} /> AI Buddy
+            </button>
+            <button
+              className={`nav-tab-btn ${activeTab === 'doubts' ? 'active' : ''}`}
+              onClick={() => setActiveTab('doubts')}
+            >
+              <HelpCircle size={14} /> Doubt Solver
+            </button>
+            <button
+              className={`nav-tab-btn ${activeTab === 'mnemonics' ? 'active' : ''}`}
+              onClick={() => setActiveTab('mnemonics')}
+            >
+              <Sparkles size={14} /> Mnemonic Lab
+            </button>
+            <button
               className={`nav-tab-btn ${activeTab === 'materials' ? 'active' : ''}`}
               onClick={() => setActiveTab('materials')}
             >
@@ -1008,7 +1265,31 @@ export default function App() {
                         </span>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                        <div style={{ display: 'flex', gap: 5 }}>
+                          <button
+                            className="btn-secondary btn-sm"
+                            title="Generate Memory Anchors & Mnemonics"
+                            onClick={() => {
+                              setMnemonicConcept(c.name);
+                              setMnemonicSubject(c.subject);
+                              handleGenerateMnemonic(c.name, c.subject);
+                              setActiveTab('mnemonics');
+                            }}
+                          >
+                            <Sparkles size={11} color="var(--yellow-dark)" /> Mnemonic
+                          </button>
+                          <button
+                            className="btn-secondary btn-sm"
+                            title="Solve doubt on this concept"
+                            onClick={() => {
+                              setDoubtConcept(c.name);
+                              setDoubtSubject(c.subject);
+                              setDoubtInput(`I have a doubt about ${c.name} in ${c.subject}: What is the core mechanism and what common mistakes should I avoid?`);
+                              setActiveTab('doubts');
+                            }}
+                          >
+                            <HelpCircle size={11} color="var(--mint-dark)" /> Doubt
+                          </button>
                           <button
                             className="btn-secondary btn-sm"
                             onClick={() => {
@@ -1016,13 +1297,13 @@ export default function App() {
                               setActiveTab('curve');
                             }}
                           >
-                            <LineChart size={12} /> Inspect
+                            <LineChart size={11} /> Curve
                           </button>
                           <button
                             className="btn-primary btn-sm"
                             onClick={() => startQuizSession(null, c.id)}
                           >
-                            <Play size={12} /> Quiz
+                            <Play size={11} /> Quiz
                           </button>
                         </div>
                       </td>
@@ -1313,9 +1594,25 @@ export default function App() {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
                   <button className="btn-secondary" onClick={() => setActiveTab('dashboard')}>
                     Return to Dashboard
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      const missed = quizSession.sessionResults.filter(r => !r.isCorrect);
+                      const subj = quizSession.questions[0]?.subject || 'All';
+                      setChatSubject(subj);
+                      if (missed.length > 0) {
+                        setChatInput(`I just missed "${missed.map(m => m.concept_name).join(', ')}" in my quiz. Can you act as my Socratic tutor and help me discover where my misunderstanding is?`);
+                      } else {
+                        setChatInput(`I scored 100% on my recent quiz! What advanced edge cases or tricky exam questions should I practice next?`);
+                      }
+                      setActiveTab('chat');
+                    }}
+                  >
+                    <MessageSquare size={14} color="var(--mint-dark)" /> Discuss with AI Buddy
                   </button>
                   <button className="btn-secondary" onClick={() => setActiveTab('curve')}>
                     <LineChart size={14} /> View Forgetting Curves
@@ -1323,6 +1620,538 @@ export default function App() {
                   <button className="btn-primary" onClick={() => startQuizSession()}>
                     <RotateCcw size={14} /> Start Another Session
                   </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= SCREEN: AI STUDY BUDDY (CHATBOT) ================= */}
+        {activeTab === 'chat' && (
+          <div className="animate-fade-in chat-window">
+            <div className="chat-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--mint-bg)', border: '1px solid var(--mint)', display: 'grid', placeItems: 'center', color: 'var(--mint-dark)' }}>
+                  <Bot size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    Socratic AI Study Buddy
+                    <span className="badge badge-easy" style={{ fontSize: 10 }}>Gemini 2.0</span>
+                  </h3>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    Active recall tutor grounded in your memory half-life metrics
+                  </span>
+                </div>
+              </div>
+
+              {/* Persona and Subject Controls */}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div className="persona-selector">
+                  <button
+                    className={`persona-pill ${chatPersona === 'socratic' ? 'active' : ''}`}
+                    onClick={() => setChatPersona('socratic')}
+                    title="Active recall tutor that asks guiding questions"
+                  >
+                    🧠 Socratic Tutor
+                  </button>
+                  <button
+                    className={`persona-pill ${chatPersona === 'exam_prep' ? 'active' : ''}`}
+                    onClick={() => setChatPersona('exam_prep')}
+                    title="High-yield exam summaries and edge-cases"
+                  >
+                    🎯 Exam Coach
+                  </button>
+                  <button
+                    className={`persona-pill ${chatPersona === 'eli5' ? 'active' : ''}`}
+                    onClick={() => setChatPersona('eli5')}
+                    title="Simple analogies with zero jargon"
+                  >
+                    💡 ELI5 Explainer
+                  </button>
+                </div>
+
+                <select
+                  className="select-input"
+                  style={{ width: 'auto', padding: '5px 10px', fontSize: 11 }}
+                  value={chatSubject}
+                  onChange={e => setChatSubject(e.target.value)}
+                >
+                  <option value="All">All Subjects</option>
+                  <option value="Artificial Intelligence">AI & Neural Nets</option>
+                  <option value="Operating Systems">Operating Systems</option>
+                  <option value="Mathematics">Mathematics</option>
+                  <option value="Distributed Systems">Distributed Systems</option>
+                </select>
+
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => setChatMessages([
+                    {
+                      role: 'model',
+                      content: "Chat cleared! What new concept or doubt would you like to master?",
+                      timestamp: 'Just now',
+                      followups: [
+                        "Quiz me on my weakest concept",
+                        "Explain Bayes Theorem & Posterior Update",
+                        "How do I prevent memory decay in Distributed Systems?"
+                      ]
+                    }
+                  ])}
+                  title="Reset conversation"
+                >
+                  <RotateCcw size={12} /> Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Chat Feed */}
+            <div className="chat-feed">
+              {chatMessages.map((msg, idx) => (
+                <div key={idx} className={`chat-msg-row ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                  <div className={`chat-avatar ${msg.role === 'user' ? 'user-av' : 'ai-av'}`}>
+                    {msg.role === 'user' ? 'U' : <Sparkles size={15} />}
+                  </div>
+                  <div>
+                    <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                    </div>
+                    <div className="chat-meta">
+                      <span>{msg.timestamp}</span>
+                      {msg.aiPowered && <span style={{ color: 'var(--mint-dark)' }}>• Gemini Live</span>}
+                    </div>
+
+                    {msg.followups && msg.followups.length > 0 && (
+                      <div className="chat-chip-container">
+                        {msg.followups.map((chip, cIdx) => (
+                          <button
+                            key={cIdx}
+                            className="chat-suggestion-chip"
+                            onClick={() => handleSendChatMessage(chip)}
+                          >
+                            ↳ {chip}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {chatLoading && (
+                <div className="chat-msg-row ai">
+                  <div className="chat-avatar ai-av">
+                    <Sparkles size={15} />
+                  </div>
+                  <div className="chat-bubble ai" style={{ color: 'var(--muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <RefreshCw size={13} className="animate-spin" /> FocusFlow AI is thinking...
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Chat Input Bar */}
+            <div className="chat-input-bar">
+              <input
+                type="text"
+                className="chat-input-field"
+                placeholder={chatLoading ? "AI is generating..." : `Ask your study buddy anything about ${chatSubject === 'All' ? 'your subjects' : chatSubject}... (e.g. 'Test me on Raft terms')`}
+                value={chatInput}
+                disabled={chatLoading}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleSendChatMessage();
+                  }
+                }}
+              />
+              <button
+                className="btn-primary"
+                style={{ padding: '10px 18px', display: 'flex', alignItems: 'center', gap: 6 }}
+                onClick={() => handleSendChatMessage()}
+                disabled={chatLoading || !chatInput.trim()}
+              >
+                <Send size={14} /> Send
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================= SCREEN: DOUBT SOLVER ================= */}
+        {activeTab === 'doubts' && (
+          <div className="animate-fade-in" style={{ maxWidth: 940, margin: '0 auto' }}>
+            <div className="section-header">
+              <div>
+                <h1 className="section-title">
+                  <HelpCircle size={18} /> Deep Concept Doubt Solver
+                </h1>
+                <span className="section-subtitle">
+                  Ask any difficult problem, code snippet, or theoretical confusion. Gemini decomposes it into core intuition, step-by-step logic, common traps, and instant verification challenges.
+                </span>
+              </div>
+            </div>
+
+            <div className="glass-card" style={{ marginTop: 18, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 14 }}>
+                <div className="input-group">
+                  <label className="input-label">Subject</label>
+                  <select
+                    className="select-input"
+                    value={doubtSubject}
+                    onChange={e => setDoubtSubject(e.target.value)}
+                  >
+                    <option value="Operating Systems">Operating Systems</option>
+                    <option value="Artificial Intelligence">Artificial Intelligence</option>
+                    <option value="Distributed Systems">Distributed Systems</option>
+                    <option value="Mathematics">Mathematics</option>
+                    <option value="Computer Science">Computer Science General</option>
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Target Concept (Optional)</label>
+                  <select
+                    className="select-input"
+                    value={doubtConcept}
+                    onChange={e => setDoubtConcept(e.target.value)}
+                  >
+                    <option value="">General Subject Doubt</option>
+                    {concepts.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Difficulty Expectation</label>
+                  <select
+                    className="select-input"
+                    value={doubtDifficulty}
+                    onChange={e => setDoubtDifficulty(e.target.value)}
+                  >
+                    <option value="Easy">Beginner / Intuitive</option>
+                    <option value="Medium">Undergraduate Exam Level</option>
+                    <option value="Hard">Advanced / Rigorous</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Describe your doubt or paste problem statement</label>
+                <textarea
+                  className="textarea-input"
+                  rows={4}
+                  placeholder="e.g. Why does Transformer self-attention divide Query-Key dot products by sqrt(d_k)? What happens to the gradients if we omit this?"
+                  value={doubtInput}
+                  onChange={e => setDoubtInput(e.target.value)}
+                />
+              </div>
+
+              {/* Sample Doubts Quick Buttons */}
+              <div style={{ marginBottom: 16 }}>
+                <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)', display: 'block', marginBottom: 6 }}>
+                  Quick Sample Doubts:
+                </span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {[
+                    "Why divide query-key dot product by sqrt(d_k) in Transformers?",
+                    "How does Clock page replacement approximate LRU without a linked list?",
+                    "Difference between CAP consistency vs ACID consistency?",
+                    "Why does Ebbinghaus forgetting curve decay exponentially?"
+                  ].map((preset, idx) => (
+                    <button
+                      key={idx}
+                      className="chat-suggestion-chip"
+                      onClick={() => handleSolveDoubt(preset)}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  className="btn-primary"
+                  onClick={() => handleSolveDoubt()}
+                  disabled={doubtLoading || !doubtInput.trim()}
+                  style={{ padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  {doubtLoading ? <RefreshCw size={14} className="animate-spin" /> : <HelpCircle size={14} />}
+                  {doubtLoading ? 'Analyzing Doubt with Gemini...' : 'Deconstruct & Solve Doubt'}
+                </button>
+              </div>
+            </div>
+
+            {/* Doubt Solution Card */}
+            {doubtResult && (
+              <div className="animate-fade-in doubt-grid">
+                {/* 1. Core Intuition */}
+                <div className="solution-box" style={{ borderLeft: '4px solid var(--mint-dark)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <Lightbulb size={18} color="var(--yellow-dark)" />
+                    <h3 style={{ fontSize: 15, fontWeight: 700 }}>The Core Intuition</h3>
+                    {doubtResult.ai_powered && <span className="badge badge-easy">Gemini Verified</span>}
+                  </div>
+                  <p style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.6 }}>
+                    {doubtResult.core_intuition}
+                  </p>
+                </div>
+
+                {/* 2. Step-by-Step Logic Trace */}
+                <div className="solution-box">
+                  <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <CheckCircle2 size={15} color="var(--mint-dark)" /> Step-by-Step Logical Resolution
+                  </h4>
+                  {doubtResult.step_by_step_solution.map((step, sIdx) => (
+                    <div key={sIdx} className="step-item">
+                      <div className="step-num">{sIdx + 1}</div>
+                      <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink)' }}>{step}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 3. Pitfalls & Retention Hook */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+                  <div className="pitfall-box">
+                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--coral-dark)' }}>
+                      <AlertTriangle size={15} /> Common Traps & Exam Pitfalls
+                    </h4>
+                    <ul style={{ paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
+                      {doubtResult.common_pitfalls.map((pitfall, pIdx) => (
+                        <li key={pIdx}>{pitfall}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="retention-hook-box">
+                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--mint-dark)' }}>
+                      <Sparkles size={15} /> Memory Retention Anchor
+                    </h4>
+                    <p style={{ fontSize: 12, lineHeight: 1.6, fontWeight: 600 }}>
+                      {doubtResult.retention_hook}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 4. Instant Verification Challenge */}
+                {doubtResult.verification_challenge && (
+                  <div className="solution-box" style={{ background: '#fdfbf7', border: '1px solid #ebd9c5' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Zap size={15} color="var(--yellow-dark)" /> Instant Comprehension Check
+                      </h4>
+                      <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                        Verify your understanding
+                      </span>
+                    </div>
+
+                    <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+                      {doubtResult.verification_challenge.question}
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {doubtResult.verification_challenge.options.map((opt, optIdx) => {
+                        const isCorrect = optIdx === doubtResult.verification_challenge.answer_index;
+                        const isSelected = selectedChallengeOption === optIdx;
+                        let btnStyle = { padding: '10px 14px', textAlign: 'left', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', background: '#ffffff', fontSize: 12, cursor: 'pointer' };
+                        if (selectedChallengeOption !== null) {
+                          if (isCorrect) {
+                            btnStyle = { ...btnStyle, background: 'var(--mint-bg)', borderColor: 'var(--mint)', color: 'var(--mint-dark)', fontWeight: 700 };
+                          } else if (isSelected) {
+                            btnStyle = { ...btnStyle, background: 'var(--coral-bg)', borderColor: 'var(--coral)', color: 'var(--coral-dark)' };
+                          }
+                        }
+                        return (
+                          <button
+                            key={optIdx}
+                            style={btnStyle}
+                            onClick={() => setSelectedChallengeOption(optIdx)}
+                          >
+                            <span style={{ fontWeight: 700, marginRight: 8 }}>{String.fromCharCode(65 + optIdx)}.</span>
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {selectedChallengeOption !== null && (
+                      <div style={{ marginTop: 12, padding: 10, borderRadius: 'var(--radius-sm)', background: selectedChallengeOption === doubtResult.verification_challenge.answer_index ? 'var(--mint-bg)' : 'var(--coral-bg)', fontSize: 12 }}>
+                        <b>{selectedChallengeOption === doubtResult.verification_challenge.answer_index ? '✓ Exactly Right!' : '✗ Not quite:'}</b> {doubtResult.verification_challenge.explanation}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= SCREEN: MNEMONIC LAB & MEMORY ANCHORS ================= */}
+        {activeTab === 'mnemonics' && (
+          <div className="animate-fade-in" style={{ maxWidth: 940, margin: '0 auto' }}>
+            <div className="section-header">
+              <div>
+                <h1 className="section-title">
+                  <Sparkles size={18} /> AI Memory Anchor & Mnemonic Lab
+                </h1>
+                <span className="section-subtitle">
+                  Supercharge your memory half-life (h). Convert abstract computer science theorems and algorithms into vivid narrative mnemonics and interactive active recall flashcards.
+                </span>
+              </div>
+            </div>
+
+            <div className="glass-card" style={{ marginTop: 18, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+                <div className="input-group">
+                  <label className="input-label">Select from your concepts</label>
+                  <select
+                    className="select-input"
+                    value={mnemonicConcept}
+                    onChange={e => {
+                      setMnemonicConcept(e.target.value);
+                      const match = concepts.find(c => c.name === e.target.value);
+                      if (match) setMnemonicSubject(match.subject);
+                    }}
+                  >
+                    {concepts.map(c => (
+                      <option key={c.id} value={c.name}>{c.name} ({c.subject})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Or Type Custom Concept Name</label>
+                  <input
+                    type="text"
+                    className="text-input"
+                    placeholder="e.g. Paxos Consensus or Eigenvalues"
+                    value={mnemonicConcept}
+                    onChange={e => setMnemonicConcept(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                <button
+                  className="btn-primary"
+                  onClick={() => handleGenerateMnemonic()}
+                  disabled={mnemonicLoading || !mnemonicConcept.trim()}
+                  style={{ padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  {mnemonicLoading ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  {mnemonicLoading ? 'Forging Memory Anchors with Gemini...' : 'Synthesize Memory Anchors & Flashcards'}
+                </button>
+              </div>
+            </div>
+
+            {/* Mnemonic Display */}
+            {mnemonicResult && (
+              <div className="animate-fade-in">
+                {/* Story & Metaphor Cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                  <div className="glass-card" style={{ borderLeft: '4px solid var(--mint-dark)', background: '#ffffff' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <h4 style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', color: 'var(--mint-dark)' }}>
+                        🎨 Visual / Narrative Mnemonic
+                      </h4>
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={() => {
+                          navigator.clipboard.writeText(mnemonicResult.story_mnemonic);
+                          setCopiedMnemonic(true);
+                          setTimeout(() => setCopiedMnemonic(false), 2000);
+                        }}
+                      >
+                        {copiedMnemonic ? <CheckCheck size={12} color="var(--mint-dark)" /> : <Copy size={12} />}
+                        {copiedMnemonic ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
+                      {mnemonicResult.story_mnemonic}
+                    </p>
+                  </div>
+
+                  <div className="glass-card" style={{ borderLeft: '4px solid var(--yellow-dark)', background: '#ffffff' }}>
+                    <h4 style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', color: 'var(--yellow-dark)', marginBottom: 10 }}>
+                      ⚡ Catchy Acronym / Rhyme
+                    </h4>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', padding: '12px', background: 'var(--yellow-bg)', borderRadius: 'var(--radius-sm)', marginBottom: 10 }}>
+                      "{mnemonicResult.acronym_or_rhyme}"
+                    </div>
+                    <p style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      Repeat this anchor 3 times while visualizing the narrative story above.
+                    </p>
+                  </div>
+
+                  <div className="glass-card" style={{ borderLeft: '4px solid var(--coral)', background: '#ffffff' }}>
+                    <h4 style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', color: 'var(--coral)', marginBottom: 10 }}>
+                      🏗️ Real-World Engineering Metaphor
+                    </h4>
+                    <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
+                      {mnemonicResult.real_world_metaphor}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Interactive Flashcard Section */}
+                <div style={{ marginTop: 24 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                    <div>
+                      <h3 style={{ fontSize: 16, fontWeight: 800 }}>
+                        🎴 Active Recall Flashcards ({mnemonicResult.concept_name})
+                      </h3>
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        Click any card to flip between Question and Answer. Testing forces synaptic reconstruction!
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mnemonic-grid">
+                    {mnemonicResult.flashcards.map((card, fcIdx) => {
+                      const isFlipped = flippedCards[fcIdx];
+                      return (
+                        <div
+                          key={fcIdx}
+                          className="flashcard-card"
+                          onClick={() => setFlippedCards({ ...flippedCards, [fcIdx]: !isFlipped })}
+                        >
+                          <div className={`flashcard-inner ${isFlipped ? 'flipped' : ''}`}>
+                            {/* Front */}
+                            <div className="flashcard-face flashcard-front">
+                              <div>
+                                <span className="badge badge-medium" style={{ fontSize: 10, marginBottom: 8, display: 'inline-block' }}>
+                                  Flashcard {fcIdx + 1}
+                                </span>
+                                <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.5 }}>
+                                  {card.front}
+                                </h4>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--muted)' }}>
+                                <span>{card.hint ? `💡 Hint: ${card.hint}` : 'Click to flip'}</span>
+                                <span style={{ fontWeight: 600, color: 'var(--mint-dark)' }}>Reveal Answer ↻</span>
+                              </div>
+                            </div>
+
+                            {/* Back */}
+                            <div className="flashcard-face flashcard-back">
+                              <div>
+                                <span className="badge badge-easy" style={{ fontSize: 10, marginBottom: 8, display: 'inline-block' }}>
+                                  Answer & Explanation
+                                </span>
+                                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--mint-dark)', lineHeight: 1.5 }}>
+                                  {card.back}
+                                </p>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: 11, color: 'var(--mint-dark)', fontWeight: 700 }}>
+                                Flip Back ↺
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}
