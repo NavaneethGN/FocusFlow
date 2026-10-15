@@ -81,36 +81,69 @@ def extract_concepts_and_questions_fallback(title: str, text: str) -> List[Dict[
     return results
 
 
+SUPPORTED_GEMINI_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-pro-latest"
+]
+
+
 async def test_gemini_connection() -> Dict[str, Any]:
-    """Tests if the configured Gemini API key is working."""
+    """Tests if the configured Gemini API key is working by checking available models."""
     key = settings.get_gemini_api_key()
     if not key:
-        return {"configured": False, "status": "missing_key", "message": "No GEMINI_API_KEY set in backend/.env"}
+        return {"configured": False, "status": "missing_key", "message": "No GEMINI_API_KEY set. Configure it in Settings."}
 
-    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-    for model in models_to_try:
+    saw_quota_error = False
+    last_error = ""
+
+    for model in SUPPORTED_GEMINI_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
         payload = {
             "contents": [{"parts": [{"text": "Reply with 'OK'"}]}],
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 10}
         }
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 res = await client.post(url, json=payload)
                 if res.status_code == 200:
                     return {
                         "configured": True,
+                        "healthy": True,
                         "status": "connected",
                         "model": model,
                         "message": f"Successfully connected to Gemini API ({model})!"
                     }
-                elif res.status_code == 400 or res.status_code == 403:
+                elif res.status_code == 429:
+                    saw_quota_error = True
+                    last_error = f"429 Quota exceeded on {model}"
+                    continue
+                elif res.status_code in (400, 403):
                     err_msg = res.json().get("error", {}).get("message", res.text)
-                    return {"configured": True, "status": "auth_error", "message": err_msg}
+                    return {"configured": True, "healthy": False, "status": "auth_error", "message": f"Gemini auth error: {err_msg}"}
+                else:
+                    last_error = f"{res.status_code} on {model}"
         except Exception as e:
+            last_error = str(e)
             continue
 
-    return {"configured": True, "status": "connection_error", "message": "Could not connect to Gemini endpoints"}
+    if saw_quota_error:
+        return {
+            "configured": True,
+            "healthy": False,
+            "status": "quota_exceeded",
+            "message": "Gemini API key active, but daily free quota is exhausted on tested models. FocusFlow is operating with local cognitive heuristics."
+        }
+
+    return {
+        "configured": True,
+        "healthy": False,
+        "status": "connection_error",
+        "message": f"Could not connect to Gemini endpoints ({last_error}). Using local cognitive engine."
+    }
 
 
 async def generate_concepts_and_questions(title: str, content: str) -> List[Dict[str, Any]]:
@@ -143,8 +176,7 @@ Respond with valid JSON matching this exact structure:
   }}
 ]"""
 
-        models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-        for model in models_to_try:
+        for model in SUPPORTED_GEMINI_MODELS:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -202,7 +234,7 @@ Return valid JSON with these fields:
   }}
 }}"""
 
-        for model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]:
+        for model in SUPPORTED_GEMINI_MODELS:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],

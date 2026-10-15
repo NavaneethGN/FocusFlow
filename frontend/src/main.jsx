@@ -43,7 +43,12 @@ import {
   Lightbulb,
   Copy,
   CheckCheck,
-  RefreshCw
+  RefreshCw,
+  Eye,
+  EyeOff,
+  Save,
+  Key,
+  ShieldCheck
 } from 'lucide-react';
 import './styles.css';
 
@@ -461,6 +466,17 @@ export default function App() {
   const [curveData, setCurveData] = useState(null);
   const [hoveredPoint, setHoveredPoint] = useState(null);
 
+  const [weekPlan, setWeekPlan] = useState(null);
+  const [subjectsDetails, setSubjectsDetails] = useState([]);
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [geminiStatus, setGeminiStatus] = useState({ configured: false, healthy: false, model: null, message: '' });
+  const [geminiTesting, setGeminiTesting] = useState(false);
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSavedToast, setSettingsSavedToast] = useState(false);
+  const [newSubjectColor, setNewSubjectColor] = useState('#32604e');
+  const [newSubjectPriority, setNewSubjectPriority] = useState(1.2);
+
   const [settings, setSettings] = useState({
     daily_minutes: 45,
     retention_threshold: 0.70,
@@ -621,15 +637,144 @@ export default function App() {
   const [showAddSubjectInput, setShowAddSubjectInput] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
 
-  function handleAddNewSubject() {
-    const trimmed = newSubjectName.trim();
-    if (!trimmed) return;
-    if (!subjectsList.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
-      setSubjectsList(prev => [...prev, trimmed]);
+  async function handleSaveSettings(overrideSettings) {
+    const toSave = overrideSettings || settings;
+    setSettingsSaving(true);
+    try {
+      if (isApiOnline) {
+        const payload = {
+          daily_minutes: Number(toSave.daily_minutes),
+          retention_threshold: Number(toSave.retention_threshold),
+          subject_priorities: toSave.subject_priorities,
+          exam_dates: toSave.exam_dates
+        };
+        const res = await fetch(`${API_BASE}/settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const updated = await res.json();
+          setSettings(prev => ({ ...prev, ...updated }));
+          setSettingsSavedToast(true);
+          setTimeout(() => setSettingsSavedToast(false), 3000);
+          loadDashboard();
+          loadWeekPlan();
+          loadTodayPlan();
+        }
+      } else {
+        setSettingsSavedToast(true);
+        setTimeout(() => setSettingsSavedToast(false), 2500);
+      }
+    } catch (e) {
+      console.warn('Error saving settings', e);
+    } finally {
+      setSettingsSaving(false);
     }
-    setChatSubject(trimmed);
+  }
+
+  async function handleTestGeminiKey() {
+    setGeminiTesting(true);
+    try {
+      const res = await fetch(`${API_BASE}/ai/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setGeminiStatus({
+          ...data,
+          healthy: Boolean(data.healthy || data.status === 'connected')
+        });
+      }
+    } catch (e) {
+      console.warn('Test Gemini error', e);
+      setGeminiStatus({ configured: false, healthy: false, message: 'Could not connect to backend server' });
+    } finally {
+      setGeminiTesting(false);
+    }
+  }
+
+  async function handleAddNewSubject(customName, customColor, customPriority) {
+    const name = (typeof customName === 'string' && customName.trim()) ? customName.trim() : newSubjectName.trim();
+    if (!name) return;
+    const color = customColor || newSubjectColor || '#32604e';
+    const priority = parseFloat(customPriority || newSubjectPriority || 1.2);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/subjects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            color,
+            default_priority: priority
+          })
+        });
+        if (res.ok) {
+          await loadSubjects();
+          await loadDashboard();
+          await loadConcepts();
+          await loadWeekPlan();
+        }
+      }
+    } catch (e) {
+      console.warn('Add subject backend fallback', e);
+    }
+
+    setSubjectsList(prev => {
+      if (prev.some(s => s.toLowerCase() === name.toLowerCase())) return prev;
+      return [...prev, name];
+    });
+    setSettings(prev => ({
+      ...prev,
+      subject_priorities: { ...prev.subject_priorities, [name]: priority },
+      exam_dates: {
+        ...prev.exam_dates,
+        [name]: prev.exam_dates[name] || new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0]
+      }
+    }));
+
+    setChatSubject(name);
     setNewSubjectName('');
     setShowAddSubjectInput(false);
+  }
+
+  async function handleDeleteSubject(subjName) {
+    if (!subjName) return;
+    if (subjectsList.length <= 1) {
+      alert("At least one subject must be tracked.");
+      return;
+    }
+    if (!confirm(`Are you sure you want to remove "${subjName}" from your active study subjects?`)) {
+      return;
+    }
+
+    try {
+      if (isApiOnline) {
+        await fetch(`${API_BASE}/subjects/${encodeURIComponent(subjName)}`, {
+          method: 'DELETE'
+        });
+        await loadSubjects();
+        await loadDashboard();
+        await loadConcepts();
+        await loadWeekPlan();
+      }
+    } catch (e) {
+      console.warn('Delete subject backend fallback', e);
+    }
+
+    const remaining = subjectsList.filter(s => s.toLowerCase() !== subjName.toLowerCase());
+    setSubjectsList(remaining);
+    setSettings(prev => {
+      const p = { ...prev.subject_priorities };
+      const ex = { ...prev.exam_dates };
+      delete p[subjName];
+      delete ex[subjName];
+      return { ...prev, subject_priorities: p, exam_dates: ex };
+    });
+
+    if (chatSubject.toLowerCase() === subjName.toLowerCase()) {
+      setChatSubject(remaining[0] || 'Operating Systems');
+    }
   }
 
   const [chatSubject, setChatSubject] = useState('Operating Systems');
@@ -999,6 +1144,7 @@ export default function App() {
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               followups: data.suggested_followups || [],
               aiPowered: data.ai_powered,
+              model: data.model,
               cited_materials: data.cited_materials || [chatSubject]
             }
           ]);
@@ -1302,11 +1448,98 @@ export default function App() {
         loadConcepts();
         loadTodayPlan();
         loadMaterials();
+        loadSubjects();
+        loadSettings();
+        loadWeekPlan();
+        loadGeminiStatus();
       } else {
         setIsApiOnline(false);
       }
     } catch {
       setIsApiOnline(false);
+    }
+  }
+
+  async function loadSubjects() {
+    try {
+      const res = await fetch(`${API_BASE}/subjects`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          setSubjectsDetails(data);
+          const names = data.map(s => s.name);
+          setSubjectsList(names);
+          setSettings(prev => {
+            const updatedPrio = { ...prev.subject_priorities };
+            const updatedExams = { ...prev.exam_dates };
+            data.forEach(s => {
+              if (updatedPrio[s.name] === undefined) {
+                updatedPrio[s.name] = s.default_priority || 1.0;
+              }
+              if (!updatedExams[s.name]) {
+                const d = new Date();
+                d.setDate(d.getDate() + 14);
+                updatedExams[s.name] = d.toISOString().split('T')[0];
+              }
+            });
+            return { ...prev, subject_priorities: updatedPrio, exam_dates: updatedExams };
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('loadSubjects fallback', e);
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const res = await fetch(`${API_BASE}/settings`);
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(prev => ({
+          ...prev,
+          daily_minutes: data.daily_minutes || prev.daily_minutes,
+          retention_threshold: data.retention_threshold !== undefined ? data.retention_threshold : prev.retention_threshold,
+          subject_priorities: data.subject_priorities || prev.subject_priorities,
+          exam_dates: data.exam_dates || prev.exam_dates
+        }));
+        if (data.gemini_configured !== undefined) {
+          setGeminiStatus(prev => ({
+            ...prev,
+            configured: data.gemini_configured,
+            healthy: data.gemini_configured
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('loadSettings fallback', e);
+    }
+  }
+
+  async function loadWeekPlan() {
+    try {
+      const res = await fetch(`${API_BASE}/plan/week`);
+      if (res.ok) {
+        const data = await res.json();
+        setWeekPlan(data);
+      }
+    } catch (e) {
+      console.warn('loadWeekPlan fallback', e);
+    }
+  }
+
+  async function loadGeminiStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/ai/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setGeminiStatus({
+          ...data,
+          healthy: Boolean(data.healthy || data.status === 'connected')
+        });
+      }
+    } catch (e) {
+      console.warn('loadGeminiStatus fallback', e);
     }
   }
 
@@ -2778,36 +3011,227 @@ export default function App() {
               </div>
             )}
 
-            {/* 7-Day Memory Decay Forecast */}
-            <div className="glass-card" style={{ marginTop: 28 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7 }}>
-                <TrendingDown size={15} color="var(--mint-dark)" /> 7-Day Projected Memory Decay Forecast
-              </h3>
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 18 }}>
-                Estimated count of concepts dropping below the 70% retention threshold:
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 }}>
-                {['Today', 'Tomorrow', '+2 Days', '+3 Days', '+4 Days', '+5 Days', '+6 Days'].map((dayLabel, idx) => {
-                  const projectedCount = Math.min(concepts.length, metrics.due_concepts_count + idx * 2);
-                  return (
-                    <div
-                      key={dayLabel}
-                      style={{
-                        padding: 12,
-                        borderRadius: 'var(--radius-sm)',
-                        background: idx === 0 ? 'var(--mint-bg)' : '#f0ede6',
-                        border: idx === 0 ? '1px solid #c2e2cf' : '1px solid var(--line)',
-                        textAlign: 'center'
-                      }}
-                    >
-                      <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>{dayLabel}</div>
-                      <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4, color: projectedCount > 4 ? 'var(--coral)' : 'var(--mint-dark)' }}>
-                        {projectedCount} Due
+            {/* 7-Day Full Adaptive Schedule & Memory Forecast (Card Deck) */}
+            <div className="glass-card" style={{ marginTop: 28, padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--ink)' }}>
+                    <Calendar size={18} color="var(--mint-dark)" /> 7-Day Week-Full Plan & Decay Forecast
+                  </h3>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+                    Duolingo Half-Life Regression projection: concepts projected to cross below your {Math.round(settings.retention_threshold * 100)}% retention threshold.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={() => loadWeekPlan()}
+                    title="Refresh 7-day memory forecast"
+                    style={{ fontSize: 11, padding: '5px 10px' }}
+                  >
+                    <RefreshCw size={12} /> Sync Forecast
+                  </button>
+                </div>
+              </div>
+
+              {/* 7-Day Cards Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+                {(() => {
+                  const daysToRender = (weekPlan?.days && weekPlan.days.length === 7) ? weekPlan.days : Array.from({ length: 7 }).map((_, idx) => {
+                    const dateObj = new Date();
+                    dateObj.setDate(dateObj.getDate() + idx);
+                    const isToday = idx === 0;
+                    const isTmrw = idx === 1;
+                    const displayTitle = isToday ? 'Today' : isTmrw ? 'Tomorrow' : dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+                    const formattedDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const simulatedDue = concepts.filter(c => {
+                      const projDelta = c.delta_days + idx;
+                      const projP = calcRecallProb(c.half_life_days, projDelta);
+                      return projP < settings.retention_threshold;
+                    });
+                    const urgency = simulatedDue.length > 3 ? 'critical' : simulatedDue.length > 0 ? 'warning' : 'optimal';
+                    return {
+                      day_offset: idx,
+                      date: dateObj.toISOString().split('T')[0],
+                      display_title: displayTitle,
+                      formatted_date: formattedDate,
+                      due_count: simulatedDue.length,
+                      urgency_level: urgency,
+                      planned_minutes: settings.daily_minutes,
+                      subjects: [...new Set(simulatedDue.map(c => c.subject))],
+                      concepts: simulatedDue.slice(0, 3)
+                    };
+                  });
+
+                  return daysToRender.map((day) => {
+                    const isCritical = day.urgency_level === 'critical';
+                    const isWarning = day.urgency_level === 'warning';
+                    const isToday = day.day_offset === 0;
+
+                    let urgencyBadgeBg = 'var(--mint-bg)';
+                    let urgencyBadgeColor = 'var(--mint-dark)';
+                    let urgencyLabel = '🟢 Optimal';
+
+                    if (isCritical) {
+                      urgencyBadgeBg = 'var(--coral-bg)';
+                      urgencyBadgeColor = 'var(--coral-dark)';
+                      urgencyLabel = '🔴 Critical Decay';
+                    } else if (isWarning) {
+                      urgencyBadgeBg = 'var(--yellow-bg)';
+                      urgencyBadgeColor = 'var(--yellow-dark)';
+                      urgencyLabel = '🟡 Review Due';
+                    }
+
+                    return (
+                      <div
+                        key={day.day_offset}
+                        style={{
+                          background: isToday ? '#ffffff' : '#fcfbf8',
+                          borderRadius: 'var(--radius-md)',
+                          border: isToday ? '2px solid var(--mint-dark)' : isCritical ? '1.5px solid #df775d' : '1px solid var(--line)',
+                          padding: '16px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          boxShadow: isToday ? '0 4px 14px rgba(50, 96, 78, 0.10)' : '0 1px 4px rgba(0,0,0,0.03)',
+                          transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+                        }}
+                      >
+                        <div>
+                          {/* Card Top: Title, Date, Urgency */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink)' }}>
+                                  {day.display_title}
+                                </span>
+                                {isToday && (
+                                  <span style={{ fontSize: 10, background: 'var(--mint-dark)', color: '#ffffff', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                                    CURRENT
+                                  </span>
+                                )}
+                              </div>
+                              <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                                {day.formatted_date}
+                              </span>
+                            </div>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                background: urgencyBadgeBg,
+                                color: urgencyBadgeColor,
+                                padding: '3px 8px',
+                                borderRadius: 12
+                              }}
+                            >
+                              {urgencyLabel}
+                            </span>
+                          </div>
+
+                          {/* Quick Stats: Target Time & Concepts Count */}
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '8px 10px',
+                              background: '#f4f1eb',
+                              borderRadius: 'var(--radius-sm)',
+                              fontSize: 11,
+                              marginBottom: 12
+                            }}
+                          >
+                            <span style={{ fontWeight: 600, color: 'var(--ink)' }}>
+                              ⏱️ <b>{day.planned_minutes || settings.daily_minutes}m</b> Focus Target
+                            </span>
+                            <span style={{ fontWeight: 700, color: day.due_count > 0 ? 'var(--coral)' : 'var(--mint-dark)' }}>
+                              📌 {day.due_count} Due
+                            </span>
+                          </div>
+
+                          {/* Subject Focus Tags */}
+                          {day.subjects && day.subjects.length > 0 && (
+                            <div style={{ marginBottom: 12 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 5 }}>
+                                Subjects in Focus
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                {day.subjects.map(s => (
+                                  <span
+                                    key={s}
+                                    style={{
+                                      fontSize: 10,
+                                      padding: '2px 7px',
+                                      borderRadius: 4,
+                                      background: '#e9e6dd',
+                                      color: 'var(--ink)',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    {s}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Due Concepts Preview */}
+                          <div style={{ marginBottom: 14 }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+                              Projected Decaying Concepts
+                            </div>
+                            {day.concepts && day.concepts.length > 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                {day.concepts.map((c, cIdx) => (
+                                  <div
+                                    key={c.id || cIdx}
+                                    style={{
+                                      fontSize: 11,
+                                      padding: '5px 8px',
+                                      background: '#ffffff',
+                                      border: '1px solid var(--line)',
+                                      borderRadius: 'var(--radius-sm)',
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center'
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                                      {c.name}
+                                    </span>
+                                    <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: (c.p_hat || 0.5) < 0.65 ? 'var(--coral)' : 'var(--mint-dark)' }}>
+                                      {Math.round((c.p_hat || 0.5) * 100)}% recall
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: 'var(--muted)', fontStyle: 'italic', padding: '6px 0' }}>
+                                ✓ Memory retention optimal. No reviews overdue!
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card Action */}
+                        <button
+                          className={isToday ? "btn-primary" : "btn-secondary"}
+                          style={{ width: '100%', fontSize: 11, padding: '7px', justifyContent: 'center' }}
+                          onClick={() => {
+                            if (day.subjects?.[0]) {
+                              startQuizSession(day.subjects[0]);
+                            } else {
+                              startQuizSession();
+                            }
+                          }}
+                        >
+                          <Zap size={12} /> {isToday ? "Start Today's Review Queue" : `Practice ${day.display_title}'s Focus`}
+                        </button>
                       </div>
-                      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--muted)', marginTop: 2 }}>{idx === 0 ? 'Active' : 'Forecast'}</div>
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             </div>
           </div>
@@ -3529,10 +3953,25 @@ export default function App() {
                     <div>
                       <h3 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
                         Subject Doubt Solver
-                        <span className="badge badge-easy" style={{ fontSize: 10 }}>
-                          {isApiOnline ? 'Gemini 2.0' : 'Local HLR'}
+                        <span
+                          className={`badge ${geminiStatus?.healthy ? 'badge-easy' : 'badge-medium'}`}
+                          style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                          title={geminiStatus?.healthy ? `Live Gemini Reasoning Active (${geminiStatus.model || 'gemini-flash'})` : 'Local Socratic Cognitive Engine Active'}
+                        >
+                          {geminiStatus?.healthy ? `✨ Gemini AI Online (${geminiStatus.model || 'Active'})` : '🧠 Cognitive Engine (Local)'}
                         </span>
                       </h3>
+                      {!geminiStatus?.healthy && (
+                        <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
+                          Local Socratic heuristics active.{' '}
+                          <button
+                            onClick={() => setActiveTab('settings')}
+                            style={{ color: 'var(--coral-dark)', textDecoration: 'underline', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontWeight: 600 }}
+                          >
+                            Configure API Key in Settings →
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -3597,7 +4036,11 @@ export default function App() {
 
                         <div className="chat-meta">
                           <span>{msg.timestamp}</span>
-                          {msg.aiPowered && <span style={{ color: 'var(--mint-dark)' }}>• Gemini Grounded</span>}
+                          {msg.aiPowered ? (
+                            <span style={{ color: 'var(--mint-dark)', fontWeight: 600 }}>• ✨ Gemini Grounded ({msg.model || 'Live'})</span>
+                          ) : (
+                            <span style={{ color: 'var(--muted)' }}>• Local Cognitive Engine</span>
+                          )}
                           {msg.cited_materials && msg.cited_materials.length > 0 && (
                             <span style={{ color: 'var(--mint-dark)', background: 'var(--mint-bg)', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>
                               📚 Ref: {msg.cited_materials.join(', ')}
@@ -4372,24 +4815,110 @@ export default function App() {
 
         {/* ================= SCREEN 6: SETTINGS & MODEL SPEC ================= */}
         {activeTab === 'settings' && (
-          <div className="animate-fade-in" style={{ maxWidth: 840, margin: '0 auto' }}>
-            <div className="section-header">
+          <div className="animate-fade-in" style={{ maxWidth: 860, margin: '0 auto', paddingBottom: 40 }}>
+            {/* Top Action Bar */}
+            <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
               <div>
-                <h1 className="section-title">
-                  <Settings size={18} /> Planner Settings & HLR Model Engine
+                <h1 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Settings size={20} color="var(--mint-dark)" /> Planner Settings & HLR Model Engine
                 </h1>
+                <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+                  Configure your daily capacity, memory retention threshold, subject priorities, and Gemini AI.
+                </p>
+              </div>
+
+              <button
+                className="btn-primary"
+                onClick={() => handleSaveSettings()}
+                disabled={settingsSaving}
+                style={{ padding: '9px 18px', display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700 }}
+              >
+                {settingsSaving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                {settingsSaving ? 'Saving Changes...' : 'Save All Settings'}
+              </button>
+            </div>
+
+            {/* Save Success Toast */}
+            {settingsSavedToast && (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: '10px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--mint-bg)',
+                  border: '1px solid #a5d5bf',
+                  color: 'var(--mint-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  fontWeight: 700
+                }}
+              >
+                <CheckCircle2 size={16} /> All planner settings and model parameters have been persisted to the backend!
+              </div>
+            )}
+
+            {/* Card 1: Daily Study Capacity */}
+            <div className="glass-card" style={{ marginTop: 20, marginBottom: 20 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 800, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7, color: 'var(--ink)' }}>
+                <Clock size={16} color="var(--mint-dark)" /> Daily Available Study Capacity
+              </h3>
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
+                Target study time allocated for daily review blocks. The planner dynamically balances your session slots across this capacity.
+              </p>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {[20, 30, 45, 60, 90].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    className={`btn-secondary ${settings.daily_minutes === mins ? 'btn-primary' : ''}`}
+                    onClick={() => setSettings(prev => ({ ...prev, daily_minutes: mins }))}
+                    style={{ padding: '8px 16px', fontWeight: 700, fontSize: 12 }}
+                  >
+                    {mins} mins
+                  </button>
+                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>Custom:</span>
+                  <input
+                    type="number"
+                    min="10"
+                    max="360"
+                    step="5"
+                    value={settings.daily_minutes}
+                    onChange={e => setSettings(prev => ({ ...prev, daily_minutes: Math.max(10, parseInt(e.target.value) || 30) }))}
+                    className="text-input"
+                    style={{ width: 75, padding: '6px 8px', fontSize: 12, textAlign: 'center' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>min/day</span>
+                </div>
               </div>
             </div>
 
-            <div className="glass-card" style={{ marginTop: 20, marginBottom: 20 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>
-                Target Retention Threshold
-              </h3>
+            {/* Card 2: Target Retention Threshold */}
+            <div className="glass-card" style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7, color: 'var(--ink)' }}>
+                  <Brain size={16} color="var(--mint-dark)" /> Target Retention Threshold (R<sub>target</sub>)
+                </h3>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 800,
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--mint-dark)',
+                    background: 'var(--mint-bg)',
+                    padding: '3px 10px',
+                    borderRadius: 12
+                  }}
+                >
+                  {Math.round(settings.retention_threshold * 100)}% Recall Guarantee
+                </span>
+              </div>
 
               <div className="input-group">
-                <label className="input-label">
-                  Target Retention Threshold: <b>{Math.round(settings.retention_threshold * 100)}%</b>
-                </label>
                 <input
                   type="range"
                   min="0.50"
@@ -4397,68 +4926,249 @@ export default function App() {
                   step="0.05"
                   className="range-input"
                   value={settings.retention_threshold}
-                  onChange={e => setSettings({ ...settings, retention_threshold: parseFloat(e.target.value) })}
+                  onChange={e => setSettings(prev => ({ ...prev, retention_threshold: parseFloat(e.target.value) }))}
+                  style={{ width: '100%', accentColor: 'var(--mint-dark)' }}
                 />
-                <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
-                  When recall falls below this threshold, concepts are flagged as due for scheduling.
-                </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)', marginTop: 4 }}>
+                  <span>50% (High Velocity)</span>
+                  <span>70% (Duolingo Optimal)</span>
+                  <span>80% (High Retention)</span>
+                  <span>90% (Exam Mastery)</span>
+                </div>
+                <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                  Duolingo Half-Life Regression schedules concepts for review the moment recall probability drops below this threshold: <code>p = 2^(-Δ / h) &lt; R<sub>target</sub></code>.
+                </p>
               </div>
             </div>
 
+            {/* Card 3: Subject Management, Priorities & Exam Deadlines */}
             <div className="glass-card" style={{ marginBottom: 20 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>
-                Subject Exam Deadlines
-              </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14 }}>
-                {Object.keys(settings.exam_dates).map(subj => (
-                  <div key={subj} className="input-group">
-                    <label className="input-label">{subj}</label>
-                    <input
-                      type="date"
-                      className="text-input"
-                      value={settings.exam_dates[subj]}
-                      onChange={e => {
-                        const updated = { ...settings.exam_dates, [subj]: e.target.value };
-                        setSettings({ ...settings, exam_dates: updated });
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <h3 style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7, color: 'var(--ink)' }}>
+                    <Layers size={16} color="var(--mint-dark)" /> Subject Management & Priority Weighting
+                  </h3>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                    Adjust priority multipliers and upcoming exam dates. Higher priority subjects receive more frequent review slots.
+                  </p>
+                </div>
+              </div>
+
+              {/* Subject Rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {subjectsList.map(subj => {
+                  const prio = settings.subject_priorities[subj] !== undefined ? settings.subject_priorities[subj] : 1.0;
+                  const exam = settings.exam_dates[subj] || '';
+                  const conceptCount = concepts.filter(c => c.subject.toLowerCase() === subj.toLowerCase()).length;
+
+                  return (
+                    <div
+                      key={subj}
+                      style={{
+                        padding: '12px 14px',
+                        background: '#ffffff',
+                        border: '1px solid var(--line)',
+                        borderRadius: 'var(--radius-sm)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 10
                       }}
-                    />
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>{subj}</span>
+                          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', padding: '2px 7px', background: '#f0ede6', borderRadius: 10, color: 'var(--muted)' }}>
+                            {conceptCount} concepts
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11, color: 'var(--muted)' }}>Exam Date:</span>
+                            <input
+                              type="date"
+                              className="text-input"
+                              value={exam}
+                              onChange={e => {
+                                const updated = { ...settings.exam_dates, [subj]: e.target.value };
+                                setSettings(prev => ({ ...prev, exam_dates: updated }));
+                              }}
+                              style={{ padding: '4px 8px', fontSize: 11, width: 130 }}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSubject(subj)}
+                            style={{ color: 'var(--coral)', padding: '4px 8px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, background: 'none', border: '1px solid transparent' }}
+                            title={`Remove ${subj}`}
+                          >
+                            <Trash2 size={13} /> Remove
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Priority Slider */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontSize: 11, color: 'var(--muted)', minWidth: 90 }}>
+                          Priority: <b>{prio.toFixed(1)}x</b> {prio >= 1.5 ? '(High Focus)' : prio <= 0.8 ? '(Maintenance)' : '(Normal)'}
+                        </span>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="2.0"
+                          step="0.1"
+                          value={prio}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value);
+                            setSettings(prev => ({
+                              ...prev,
+                              subject_priorities: { ...prev.subject_priorities, [subj]: val }
+                            }));
+                          }}
+                          style={{ flex: 1, accentColor: 'var(--mint-dark)' }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Inline Add New Subject Form in Settings */}
+              <div style={{ marginTop: 16, padding: '12px 14px', background: '#f8f6f0', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--line)' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)', display: 'block', marginBottom: 8 }}>
+                  + Add New Subject to Planner
+                </span>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    className="text-input"
+                    placeholder="New subject name (e.g., Computer Networks, Physics)..."
+                    value={newSubjectName}
+                    onChange={e => setNewSubjectName(e.target.value)}
+                    style={{ flex: 2, minWidth: 200, padding: '7px 10px', fontSize: 12 }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>Priority:</span>
+                    <select
+                      className="select-input"
+                      value={newSubjectPriority}
+                      onChange={e => setNewSubjectPriority(parseFloat(e.target.value))}
+                      style={{ padding: '6px 8px', fontSize: 11 }}
+                    >
+                      <option value="0.8">0.8x (Low)</option>
+                      <option value="1.0">1.0x (Normal)</option>
+                      <option value="1.2">1.2x (Focused)</option>
+                      <option value="1.5">1.5x (High Focus)</option>
+                      <option value="2.0">2.0x (Exam Crunch)</option>
+                    </select>
                   </div>
-                ))}
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm"
+                    onClick={() => handleAddNewSubject()}
+                    disabled={!newSubjectName.trim()}
+                    style={{ padding: '7px 14px', fontSize: 12 }}
+                  >
+                    <Plus size={13} /> Add Subject
+                  </button>
+                </div>
               </div>
             </div>
 
+            {/* Card 4: Gemini AI Engine Status & Diagnostics */}
+            <div className="glass-card" style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <h3 style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7, color: 'var(--ink)' }}>
+                    <Sparkles size={16} color="var(--mint-dark)" /> Google Gemini AI Model & Doubt Solver
+                  </h3>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                    API authentication is managed securely on the server via <code>backend/.env</code>.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    className={`badge ${geminiStatus.healthy ? 'badge-easy' : 'badge-medium'}`}
+                    style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
+                  >
+                    {geminiStatus.healthy ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                    {geminiStatus.healthy ? `Active (${geminiStatus.model || 'Connected'})` : 'Cognitive Engine (Local)'}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => handleTestGeminiKey()}
+                    disabled={geminiTesting}
+                    style={{ padding: '6px 12px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
+                    title="Ping backend to test Gemini connection status"
+                  >
+                    {geminiTesting ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    {geminiTesting ? 'Testing...' : 'Test Connection'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Banner */}
+              <div
+                style={{
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: geminiStatus.healthy ? 'var(--mint-bg)' : '#fbf6ea',
+                  border: geminiStatus.healthy ? '1px solid #c2e2cf' : '1px solid #e7c86e',
+                  fontSize: 12
+                }}
+              >
+                <div style={{ fontWeight: 700, color: geminiStatus.healthy ? 'var(--mint-dark)' : 'var(--yellow-dark)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {geminiStatus.healthy ? (
+                    <>
+                      <CheckCircle2 size={14} /> Connected to Google Gemini ({geminiStatus.model || 'gemini-3.5-flash-lite'})
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle size={14} /> Local Cognitive Engine Active
+                    </>
+                  )}
+                </div>
+                <div style={{ color: 'var(--ink)', fontSize: 12, lineHeight: 1.5 }}>
+                  {geminiStatus.healthy
+                    ? `Live cloud reasoning is active using your environment key in backend/.env. Socratic doubt solving, grounding over uploaded sources, and flashcard generation are fully operational.`
+                    : (geminiStatus.message || 'Operating in offline/local Socratic mode. Verify GEMINI_API_KEY in backend/.env to enable live cloud reasoning.')}
+                </div>
+              </div>
+            </div>
+
+            {/* Card 5: HLR Model Versions & Mathematical Spec */}
             <div className="glass-card">
-              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7 }}>
-                <Database size={15} color="var(--mint-dark)" /> HLR Model Versions & Feature Specs
+              <h3 style={{ fontSize: 15, fontWeight: 800, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Database size={15} color="var(--mint-dark)" /> HLR Model Versions & Feature Specifications
               </h3>
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-                The launch model uses raw counts (Leitner weights: correct doubles half-life, wrong halves it). The trained model uses √counts as in Settles & Meeder (2016).
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
+                Settles & Meeder (ACL 2016) formulation: Half-life <code>ĥ = 2^(Θ · X)</code>, where Θ represents the student difficulty weights and X represents attempt counts.
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ padding: 14, borderRadius: 'var(--radius-sm)', background: 'var(--mint-bg)', border: '1px solid #c2e2cf' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700, color: 'var(--ink)' }}>Launch Model (Raw Counts)</span>
+                    <span style={{ fontWeight: 800, color: 'var(--ink)', fontSize: 13 }}>Launch Model (Leitner Baseline)</span>
                     <span className="badge badge-easy">ACTIVE</span>
                   </div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--mint-dark)', marginTop: 4 }}>
                     Feature Spec: x = [1, n_right, n_wrong] | Weights Θ = [0.0, 1.0, -1.0]
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                    Correct answer multiplies ĥ by 2; incorrect answer halves ĥ.
+                    Every correct answer doubles ĥ; every incorrect answer halves ĥ.
                   </div>
                 </div>
 
                 <div style={{ padding: 14, borderRadius: 'var(--radius-sm)', background: '#f0ede6', border: '1px solid var(--line)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700, color: 'var(--muted)' }}>Trained Model (√Counts - Settles & Meeder)</span>
+                    <span style={{ fontWeight: 800, color: 'var(--muted)', fontSize: 13 }}>Trained Model (√Counts - Settles & Meeder)</span>
                     <span className="badge badge-medium">STAGING</span>
                   </div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
                     Feature Spec: x = [1, √n_right, √n_wrong] | Weights Θ = [0.15, 1.42, -1.18]
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                    Learned via AdaGrad offline gradient descent on student attempt logs.
+                    Trained via AdaGrad gradient descent on student recall attempt logs.
                   </div>
                 </div>
               </div>
@@ -4475,35 +5185,41 @@ export default function App() {
               left: 0,
               right: 0,
               bottom: 0,
-              background: 'rgba(36, 49, 46, 0.4)',
-              backdropFilter: 'blur(4px)',
+              background: 'rgba(36, 49, 46, 0.45)',
+              backdropFilter: 'blur(5px)',
               zIndex: 100,
               display: 'grid',
               placeItems: 'center',
               padding: 20
             }}
           >
-            <div className="glass-card animate-fade-in" style={{ maxWidth: 520, width: '100%', padding: 28, background: '#ffffff' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <h3 style={{ fontSize: 17, fontWeight: 800 }}>FocusFlow Setup Wizard</h3>
+            <div className="glass-card animate-fade-in" style={{ maxWidth: 540, width: '100%', padding: 28, background: '#ffffff', boxShadow: '0 12px 36px rgba(0,0,0,0.18)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h3 style={{ fontSize: 18, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Sliders size={18} color="var(--mint-dark)" /> FocusFlow Setup Wizard
+                </h3>
                 <button onClick={() => setShowOnboarding(false)} style={{ color: 'var(--muted)' }}>
                   <X size={18} />
                 </button>
               </div>
 
               <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18 }}>
-                Configure your target subjects and study capacity to initialize your personal HLR memory model.
+                Configure your target subjects, study capacity, and retention goals to initialize your personal HLR adaptive schedule.
               </p>
 
-              <div className="input-group">
-                <label className="input-label">Daily Available Study Time</label>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {[20, 30, 45, 60].map(mins => (
+              {/* Daily Available Study Time */}
+              <div className="input-group" style={{ marginBottom: 18 }}>
+                <label className="input-label" style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, display: 'block' }}>
+                  Daily Available Study Time
+                </label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[20, 30, 45, 60, 90].map(mins => (
                     <button
                       key={mins}
+                      type="button"
                       className={`btn-secondary ${settings.daily_minutes === mins ? 'btn-primary' : ''}`}
-                      onClick={() => setSettings({ ...settings, daily_minutes: mins })}
-                      style={{ flex: 1, padding: 7 }}
+                      onClick={() => setSettings(prev => ({ ...prev, daily_minutes: mins }))}
+                      style={{ flex: 1, minWidth: 60, padding: '8px 10px', fontSize: 12, fontWeight: 700 }}
                     >
                       {mins}m
                     </button>
@@ -4511,29 +5227,116 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="input-group">
-                <label className="input-label">Subjects to Track</label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {Object.keys(settings.subject_priorities).map(subj => (
-                    <span key={subj} className="badge badge-easy" style={{ padding: '5px 10px', fontSize: 11 }}>
-                      <Check size={12} /> {subj}
-                    </span>
+              {/* Target Retention Goal */}
+              <div className="input-group" style={{ marginBottom: 18 }}>
+                <label className="input-label" style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, display: 'block' }}>
+                  Target Retention Guarantee (R<sub>target</sub>)
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[
+                    { val: 0.70, label: '70% Balanced' },
+                    { val: 0.80, label: '80% High' },
+                    { val: 0.85, label: '85% Exam Mastery' }
+                  ].map(tier => (
+                    <button
+                      key={tier.val}
+                      type="button"
+                      className={`btn-secondary ${settings.retention_threshold === tier.val ? 'btn-primary' : ''}`}
+                      onClick={() => setSettings(prev => ({ ...prev, retention_threshold: tier.val }))}
+                      style={{ flex: 1, padding: '7px 8px', fontSize: 11, fontWeight: 600 }}
+                    >
+                      {tier.label}
+                    </button>
                   ))}
                 </div>
               </div>
 
-              <div style={{ marginTop: 22, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <button className="btn-secondary" onClick={() => setShowOnboarding(false)}>
+              {/* Subjects to Track */}
+              <div className="input-group" style={{ marginBottom: 18 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <label className="input-label" style={{ fontWeight: 700, fontSize: 12, margin: 0 }}>
+                    Subjects to Track
+                  </label>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>Click to toggle</span>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                  {subjectsList.map(subj => {
+                    const isTracked = settings.subject_priorities[subj] !== undefined && settings.subject_priorities[subj] > 0;
+                    return (
+                      <button
+                        key={subj}
+                        type="button"
+                        onClick={() => {
+                          setSettings(prev => {
+                            const updated = { ...prev.subject_priorities };
+                            if (isTracked) {
+                              updated[subj] = 0;
+                            } else {
+                              updated[subj] = 1.2;
+                            }
+                            return { ...prev, subject_priorities: updated };
+                          });
+                        }}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 'var(--radius-full)',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          border: isTracked ? '1px solid var(--mint-dark)' : '1px solid var(--line)',
+                          background: isTracked ? 'var(--mint-bg)' : '#f4f1eb',
+                          color: isTracked ? 'var(--mint-dark)' : 'var(--muted)',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {isTracked ? <Check size={12} /> : <Plus size={12} />} {subj}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Inline mini add subject for wizard */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="text"
+                    className="text-input"
+                    placeholder="Add custom subject..."
+                    value={newSubjectName}
+                    onChange={e => setNewSubjectName(e.target.value)}
+                    style={{ flex: 1, padding: '6px 10px', fontSize: 11 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    disabled={!newSubjectName.trim()}
+                    onClick={() => handleAddNewSubject()}
+                    style={{ fontSize: 11, padding: '6px 12px' }}
+                  >
+                    + Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Wizard Footer Actions */}
+              <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn-secondary" onClick={() => setShowOnboarding(false)} style={{ padding: '8px 16px', fontSize: 12 }}>
                   Close
                 </button>
                 <button
                   className="btn-primary"
-                  onClick={() => {
+                  onClick={async () => {
+                    await handleSaveSettings();
+                    await handleRecreateSchedule();
                     setShowOnboarding(false);
                     setActiveTab('plan');
                   }}
+                  style={{ padding: '8px 20px', fontSize: 12, fontWeight: 700 }}
                 >
-                  Generate Adaptive Plan
+                  <Sparkles size={13} /> Generate Adaptive Plan
                 </button>
               </div>
             </div>

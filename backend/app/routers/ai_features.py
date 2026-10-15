@@ -32,14 +32,16 @@ async def chat_endpoint(req: ChatRequest):
     mats_text = req.materials_context or ""
     if not mats_text:
         try:
-            import main
-            matching = [
-                f"### Material: {m.get('title', 'Study Notes')}\n{m.get('content', '')}"
-                for m in getattr(main, "db_materials", [])
-                if not req.subject or req.subject.lower() == "all" or m.get("subject", "").lower() == req.subject.lower()
-            ]
-            if matching:
-                mats_text = "\n\n".join(matching)
+            import sys
+            main_mod = sys.modules.get("main")
+            if main_mod:
+                matching = [
+                    f"### Material: {m.get('title', 'Study Notes')}\n{m.get('content', '')}"
+                    for m in getattr(main_mod, "db_materials", [])
+                    if not req.subject or req.subject.lower() == "all" or m.get("subject", "").lower() == req.subject.lower()
+                ]
+                if matching:
+                    mats_text = "\n\n".join(matching)
         except Exception:
             pass
 

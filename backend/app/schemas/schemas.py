@@ -252,18 +252,50 @@ class ConceptCurveResponse(BaseModel):
     practice_history: list[HistoryPoint]
 
 
+# --- Subject Schemas ---
+class SubjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    color: str = Field(default="#4f46e5")
+    priority_weight: float = Field(default=1.0, ge=0.1, le=5.0)
+    exam_date: str | None = None
+
+
+class SubjectUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
+    priority_weight: float | None = None
+    exam_date: str | None = None
+
+
+class SubjectDetail(BaseModel):
+    id: int | str
+    name: str
+    color: str = "#4f46e5"
+    priority_weight: float = 1.0
+    exam_date: str | None = None
+    total_concepts: int = 0
+    total_materials: int = 0
+    avg_p_hat: float = 0.0
+    due_concepts_count: int = 0
+    weak_concepts_count: int = 0
+
+
 # --- Settings ---
 class SettingsUpdateRequest(BaseModel):
     daily_minutes: int = Field(ge=10, le=480)
+    retention_threshold: float | None = 0.70
     subject_priorities: dict[str, float] = Field(default_factory=dict)
     exam_dates: dict[str, str] = Field(default_factory=dict)
+    gemini_api_key: str | None = None
 
 
 class SettingsResponse(BaseModel):
-    user_id: int
+    user_id: int | None = 1
     daily_minutes: int
+    retention_threshold: float = 0.70
     subject_priorities: dict[str, float]
     exam_dates: dict[str, str]
+    gemini_configured: bool = False
 
 
 # --- AI Features (Chatbot, Doubt Solver, Mnemonic Lab) ---

@@ -162,6 +162,8 @@ class UserSettings(BaseModel):
         "Mathematics": (get_current_time() + timedelta(days=30)).strftime("%Y-%m-%d"),
         "Distributed Systems": (get_current_time() + timedelta(days=28)).strftime("%Y-%m-%d"),
     }
+    gemini_configured: bool = False
+    gemini_api_key: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # In-Memory Database Seed
@@ -519,7 +521,7 @@ from app.services.hlr import DEFAULT_LAUNCH_THETA, DEFAULT_FEATURE_SPEC
 from app.services.quiz_gen import generate_concepts_and_questions, explain_concept_with_gemini, test_gemini_connection
 
 # Routers
-from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router, ai_features
+from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router, ai_features, subjects
 
 
 def seed_initial_data():
@@ -1569,22 +1571,45 @@ def get_week_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) 
         for c in db_concepts.values():
             h = c["half_life_days"]
             last_dt = datetime.fromisoformat(c["last_practiced_at"])
-            projected_delta = (day_date - last_dt).total_seconds() / 86400.0
+            projected_delta = max(0.0, (day_date - last_dt).total_seconds() / 86400.0)
             projected_p = recall_prob(h, projected_delta)
             if projected_p <= db_settings.retention_threshold:
-                due_on_day.append({"name": c["name"], "subject": c["subject"], "p_hat": round(projected_p, 3)})
-                
+                due_on_day.append({
+                    "name": c["name"],
+                    "subject": c["subject"],
+                    "topic": c.get("topic", c["subject"]),
+                    "p_hat": round(projected_p, 3),
+                    "half_life_days": h
+                })
+        
+        # Sort by lowest p_hat
+        due_on_day.sort(key=lambda item: item["p_hat"])
+        unique_subjects = list(dict.fromkeys(item["subject"] for item in due_on_day))
+        
+        planned_mins = db_settings.daily_minutes if i < 5 else max(25, db_settings.daily_minutes - 15)
+        due_cnt = len(due_on_day)
+        urgency = "critical" if due_cnt >= 4 else "warning" if due_cnt >= 2 else "optimal"
+
         days.append({
             "day_index": i,
+            "is_today": (i == 0),
             "date": day_date.strftime("%Y-%m-%d"),
+            "formatted_date": day_date.strftime("%b %d"),
             "weekday": day_date.strftime("%A"),
-            "planned_minutes": db_settings.daily_minutes if i < 5 else max(25, db_settings.daily_minutes - 15),
-            "due_count": len(due_on_day),
-            "concepts": due_on_day[:3]
+            "display_title": "Today" if i == 0 else "Tomorrow" if i == 1 else day_date.strftime("%A"),
+            "planned_minutes": planned_mins,
+            "estimated_sessions": max(1, planned_mins // 30),
+            "due_count": due_cnt,
+            "urgency_level": urgency,
+            "subjects": unique_subjects,
+            "concepts": due_on_day[:6],
+            "total_due": due_cnt
         })
         
     return {
         "week_start": today.strftime("%Y-%m-%d"),
+        "retention_threshold": db_settings.retention_threshold,
+        "daily_minutes_goal": db_settings.daily_minutes,
         "days": days
     }
 
@@ -1916,19 +1941,39 @@ def complete_session(
 
 @app.get("/api/settings")
 def get_settings(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
+    k = settings.get_gemini_api_key()
+    db_settings.gemini_configured = bool(k and len(k) > 5)
     if user_id is not None:
         return settings_router.get_settings(user_id=user_id, db=db)
     return db_settings
 
 @app.put("/api/settings")
 def update_settings(settings_payload: Dict[str, Any], user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
+    global db_settings
+    if "gemini_api_key" in settings_payload and settings_payload["gemini_api_key"]:
+        settings.set_gemini_api_key(settings_payload["gemini_api_key"])
+    
+    if "daily_minutes" in settings_payload and settings_payload["daily_minutes"] is not None:
+        db_settings.daily_minutes = int(settings_payload["daily_minutes"])
+    if "retention_threshold" in settings_payload and settings_payload["retention_threshold"] is not None:
+        db_settings.retention_threshold = float(settings_payload["retention_threshold"])
+    if "subject_priorities" in settings_payload and isinstance(settings_payload["subject_priorities"], dict):
+        db_settings.subject_priorities.update(settings_payload["subject_priorities"])
+    if "exam_dates" in settings_payload and isinstance(settings_payload["exam_dates"], dict):
+        db_settings.exam_dates.update(settings_payload["exam_dates"])
+
+    k = settings.get_gemini_api_key()
+    db_settings.gemini_configured = bool(k and len(k) > 5)
+
     if user_id is not None:
         from app.schemas.schemas import SettingsUpdateRequest
-        update_obj = SettingsUpdateRequest(**settings_payload)
-        res = settings_router.update_settings(update_obj, user_id=user_id, db=db)
-        return res.model_dump() if hasattr(res, "model_dump") else res.dict()
-    global db_settings
-    db_settings = UserSettings(**settings_payload)
+        update_obj = SettingsUpdateRequest(
+            daily_minutes=db_settings.daily_minutes,
+            retention_threshold=db_settings.retention_threshold,
+            subject_priorities=db_settings.subject_priorities,
+            exam_dates=db_settings.exam_dates
+        )
+        settings_router.update_settings(update_obj, user_id=user_id, db=db)
     return db_settings
 
 from ml.model_registry import GLOBAL_REGISTRY
@@ -1966,6 +2011,7 @@ def get_models() -> Dict[str, Any]:
         }
 
 # Include HLR routers
+app.include_router(subjects.router)
 app.include_router(materials.router)
 app.include_router(concepts.router)
 app.include_router(quizzes.router)
@@ -2018,12 +2064,4 @@ def legacy_schedule(request: LegacyScheduleRequest):
         "schedule": output,
         "priority_order": [t.subject for t in request.tasks],
     }
-# Include HLR routers
-app.include_router(materials.router)
-app.include_router(concepts.router)
-app.include_router(quizzes.router)
-app.include_router(sessions.router)
-app.include_router(dashboard.router)
-app.include_router(plan.router)
-app.include_router(settings_router.router)
 

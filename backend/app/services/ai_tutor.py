@@ -5,7 +5,14 @@ import httpx
 from app.core.config import settings
 from app.services.quiz_gen import sanitize_json
 
-GEMINI_MODELS = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+GEMINI_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-pro-latest",
+]
 
 
 async def chat_with_gemini(
@@ -51,7 +58,6 @@ async def chat_with_gemini(
     if key:
         # Build multi-turn contents
         contents = []
-        # Inject system prompt into first turn or context
         first_user_text = f"[System Context: {system_instruction}{context_str}]\n\n"
 
         for i, turn in enumerate(history[-8:]):  # Keep recent context window
@@ -83,7 +89,7 @@ async def chat_with_gemini(
                 },
             }
             try:
-                async with httpx.AsyncClient(timeout=25.0) as client:
+                async with httpx.AsyncClient(timeout=12.0) as client:
                     res = await client.post(url, json=payload)
                     if res.status_code == 200:
                         data = res.json()
@@ -112,31 +118,70 @@ async def chat_with_gemini(
                             "suggested_followups": followups[:3],
                             "cited_materials": [subject] if subject else ["General Study Notes"],
                         }
+                    elif res.status_code in (429, 404):
+                        print(f"Gemini API returned status {res.status_code} on {model}. Trying next model...")
+                        continue
+                    elif res.status_code in (400, 403):
+                        print(f"Gemini API auth error ({res.status_code}).")
+                        break
             except Exception as e:
                 print(f"Chat error with {model}: {e}")
+                continue
 
-    # Offline / missing key fallback
+    # Offline / missing key or quota fallback
     subject_label = subject or "this topic"
+    meta_keywords = [
+        "capabilities", "what can you do", "who are you", "what are your features",
+        "how does this work", "help me understand focusflow", "hello", "hi", "how are you"
+    ]
+    is_meta = any(k in message.lower() for k in meta_keywords)
+
+    if is_meta:
+        meta_reply = (
+            "### 🧠 FocusFlow Subject Doubt Solver & AI Study Buddy\n\n"
+            "Here are my core capabilities to help you master any subject and achieve long-term memory retention:\n\n"
+            "1. **Socratic Doubt Solving:** I deconstruct tricky doubts into foundational mental models, guiding you through thoughtful active recall questions rather than passive spoon-feeding.\n"
+            "2. **Grounded Source Analysis:** Upload course notes, lecture slides, or textbook excerpts (`PDF`, `DOCX`, `PPTX`, `TXT`) in the left panel. I directly reference your specific materials to answer doubts.\n"
+            "3. **Adaptive Personas:**\n"
+            "   - **Socratic:** Deep conceptual intuition & guided questions.\n"
+            "   - **Exam Prep:** High-yield exam bullet points, common traps, and formulas.\n"
+            "   - **ELI5:** Delightful, intuitive real-world metaphors with zero pretension.\n"
+            "4. **Duolingo Half-Life Regression (HLR) Math:** Every review session updates your memory half-life ($h = 2^{\\theta x}$) and recall probability ($p = 2^{-\\Delta / h}$) to schedule study sessions right before memory decays.\n\n"
+            "*Ask any conceptual doubt about your subjects, paste notes, or select a topic from the sidebar to begin!*"
+        )
+        return {
+            "reply": meta_reply,
+            "persona": persona,
+            "ai_powered": False,
+            "model": "local-cognitive-engine",
+            "suggested_followups": [
+                f"Quiz me on {subject_label}",
+                "Can you explain the Half-Life Regression formula?",
+                "What is a real-world software engineering analogy for this?"
+            ],
+            "cited_materials": [subject] if subject else ["FocusFlow System Knowledge"]
+        }
+
     if materials_context:
         clean_excerpt = materials_context.replace("### Material:", "").strip()
-        first_lines = "\n".join(clean_excerpt.splitlines()[:4]).strip()
+        first_lines = "\n".join(clean_excerpt.splitlines()[:5]).strip()
         fallback_replies = {
             "socratic": (
-                f"Regarding your doubt on **{subject_label}**, let's inspect what your uploaded materials specify:\n\n"
-                f"> *\"{first_lines[:240]}...\"*\n\n"
-                f"**Intuitive Resolution:** In **{subject_label}**, the primary mechanism ensures consistency by strictly enforcing invariant state boundaries. "
-                f"When you asked *'{message.strip('?')}'*, notice how the uploaded text handles this constraint. "
-                f"What do you predict would happen if this invariant were violated during execution?"
+                f"Regarding your doubt on **{subject_label}**, let's inspect the underlying mechanism in your study material:\n\n"
+                f"> *\"{first_lines[:260]}...\"*\n\n"
+                f"**Cognitive Intuition:** In **{subject_label}**, the primary mechanism maintains consistency by enforcing invariant state boundaries. "
+                f"When addressing *'{message.strip('?')}'*, observe how the system handles transition edge cases. "
+                f"What do you predict would happen if this boundary constraint were violated during execution?"
             ),
             "exam_prep": (
                 f"### High-Yield Doubt Resolution ({subject_label})\n"
-                f"- **From Your Uploaded Material:** *\"{first_lines[:180]}...\"*\n"
-                f"- **Key Takeaway:** For *{message[:35]}*, always state the core invariant and boundary conditions first.\n"
-                f"- **Common Trap:** Conflating temporary transient failure with persistent partition decay.\n"
-                f"- **HLR Anchor:** Retention decays exponentially as $p = 2^{{-\\Delta / h}}$, so immediate targeted review cements this principle."
+                f"- **From Study Sources:** *\"{first_lines[:180]}...\"*\n"
+                f"- **Key Takeaway:** For *{message[:40]}*, always articulate the underlying invariant and boundary conditions first.\n"
+                f"- **Exam Pitfall:** Conflating temporary transient failure with persistent partition decay.\n"
+                f"- **HLR Anchor:** Retention decays exponentially as $p = 2^{{-\\Delta / h}}$, so immediate targeted quiz review cements this principle."
             ),
             "eli5": (
-                f"Think of your uploaded notes on **{subject_label}** like a clear instruction manual! "
+                f"Think of your notes on **{subject_label}** like a clear instruction manual! "
                 f"It points out: *\"{first_lines[:150]}...\"*\n\n"
                 f"In simple terms, it's just like having guardrails on a bridge so nothing falls over the edge no matter how busy traffic gets!"
             ),
@@ -166,7 +211,7 @@ async def chat_with_gemini(
         "reply": fallback_replies.get(persona, fallback_replies["socratic"]),
         "persona": persona,
         "ai_powered": False,
-        "model": "offline-tutor",
+        "model": "local-cognitive-engine",
         "suggested_followups": [
             f"Quiz me on {subject_label}",
             "Can you explain the formula step-by-step?",
@@ -223,7 +268,7 @@ Provide a structured pedagogical resolution. Return strictly valid JSON:
                 },
             }
             try:
-                async with httpx.AsyncClient(timeout=25.0) as client:
+                async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(url, json=payload)
                     if res.status_code == 200:
                         data = res.json()
@@ -236,8 +281,15 @@ Provide a structured pedagogical resolution. Return strictly valid JSON:
                             parsed["ai_powered"] = True
                             parsed["model"] = model
                             return parsed
+                    elif res.status_code in (429, 404):
+                        print(f"Gemini API returned status {res.status_code} in doubt solver on {model}. Trying next...")
+                        continue
+                    elif res.status_code in (400, 403):
+                        print(f"Gemini API auth error in doubt solver ({res.status_code}).")
+                        break
             except Exception as e:
                 print(f"Doubt solve error with {model}: {e}")
+                continue
 
     # Fallback Doubt Resolution
     return {

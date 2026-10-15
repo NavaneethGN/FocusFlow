@@ -35,5 +35,17 @@ class Settings(BaseModel):
             pass
         return os.getenv("GEMINI_API_KEY", "").strip() or self.GEMINI_API_KEY.strip()
 
+    def set_gemini_api_key(self, new_key: str) -> None:
+        cleaned = new_key.strip()
+        os.environ["GEMINI_API_KEY"] = cleaned
+        self.GEMINI_API_KEY = cleaned
+        try:
+            cur = Path(__file__).resolve()
+            backend_env = cur.parent.parent.parent / ".env"
+            with open(backend_env, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={cleaned}\n")
+        except Exception as e:
+            print(f"Error persisting GEMINI_API_KEY to .env: {e}")
+
 
 settings = Settings()
