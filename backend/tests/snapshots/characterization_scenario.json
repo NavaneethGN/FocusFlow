@@ -1,0 +1,617 @@
+{
+  "answer1_response": {
+    "event_id": "evt-char-001",
+    "h_change_pct": 100.0,
+    "is_correct": true,
+    "old_half_life": 4.0,
+    "projected_half_life": 8.0,
+    "recorded": true
+  },
+  "answer2_response": {
+    "event_id": "evt-char-002",
+    "h_change_pct": -50.0,
+    "is_correct": false,
+    "old_half_life": 4.0,
+    "projected_half_life": 2.0,
+    "recorded": true
+  },
+  "complete_response": {
+    "completed_at": "2026-10-15T12:00:00+00:00",
+    "concept_updates": [
+      {
+        "concept_id": "c-ai-1",
+        "concept_name": "Backpropagation & Chain Rule",
+        "new_half_life": 4.0,
+        "next_review_date": "Oct 17",
+        "next_review_days": 2.1,
+        "old_half_life": 4.0,
+        "session_score": "1/2",
+        "subject": "Artificial Intelligence"
+      }
+    ],
+    "session_id": "sess-char-001",
+    "success": true,
+    "total_attempts": 2
+  },
+  "curve_response": {
+    "concept": {
+      "delta_days": 0.0,
+      "difficulty": "Hard",
+      "half_life_days": 4.0,
+      "id": "c-ai-1",
+      "is_due": false,
+      "last_practiced_at": "2026-10-15T12:00:00+00:00",
+      "n_right": 4,
+      "n_wrong": 2,
+      "name": "Backpropagation & Chain Rule",
+      "next_review_at": "2026-10-17T13:23:56.488530+00:00",
+      "p_hat": 0.9999,
+      "subject": "Artificial Intelligence",
+      "topic": "Neural Networks"
+    },
+    "current_delta_days": 0.0,
+    "current_p_hat": 0.9999,
+    "curve_points": [
+      {
+        "delta_days": 0.0,
+        "p_hat": 0.9999,
+        "retention_pct": 100.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 0.29,
+        "p_hat": 0.951,
+        "retention_pct": 95.1,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 0.59,
+        "p_hat": 0.9028,
+        "retention_pct": 90.3,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 0.88,
+        "p_hat": 0.8586,
+        "retention_pct": 85.9,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 1.18,
+        "p_hat": 0.8151,
+        "retention_pct": 81.5,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 1.47,
+        "p_hat": 0.7751,
+        "retention_pct": 77.5,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 1.76,
+        "p_hat": 0.7371,
+        "retention_pct": 73.7,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 2.06,
+        "p_hat": 0.6998,
+        "retention_pct": 70.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 2.35,
+        "p_hat": 0.6655,
+        "retention_pct": 66.5,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 2.65,
+        "p_hat": 0.6318,
+        "retention_pct": 63.2,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 2.94,
+        "p_hat": 0.6008,
+        "retention_pct": 60.1,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 3.24,
+        "p_hat": 0.5704,
+        "retention_pct": 57.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 3.53,
+        "p_hat": 0.5424,
+        "retention_pct": 54.2,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 3.82,
+        "p_hat": 0.5158,
+        "retention_pct": 51.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 4.12,
+        "p_hat": 0.4897,
+        "retention_pct": 49.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 4.41,
+        "p_hat": 0.4657,
+        "retention_pct": 46.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 4.71,
+        "p_hat": 0.4421,
+        "retention_pct": 44.2,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 5.0,
+        "p_hat": 0.4204,
+        "retention_pct": 42.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 5.29,
+        "p_hat": 0.3998,
+        "retention_pct": 40.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 5.59,
+        "p_hat": 0.3796,
+        "retention_pct": 38.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 5.88,
+        "p_hat": 0.361,
+        "retention_pct": 36.1,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 6.18,
+        "p_hat": 0.3427,
+        "retention_pct": 34.3,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 6.47,
+        "p_hat": 0.3259,
+        "retention_pct": 32.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 6.76,
+        "p_hat": 0.3099,
+        "retention_pct": 31.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 7.06,
+        "p_hat": 0.2942,
+        "retention_pct": 29.4,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 7.35,
+        "p_hat": 0.2798,
+        "retention_pct": 28.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 7.65,
+        "p_hat": 0.2656,
+        "retention_pct": 26.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 7.94,
+        "p_hat": 0.2526,
+        "retention_pct": 25.3,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 8.24,
+        "p_hat": 0.2398,
+        "retention_pct": 24.0,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 8.53,
+        "p_hat": 0.2281,
+        "retention_pct": 22.8,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 8.82,
+        "p_hat": 0.2169,
+        "retention_pct": 21.7,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 9.12,
+        "p_hat": 0.2059,
+        "retention_pct": 20.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 9.41,
+        "p_hat": 0.1958,
+        "retention_pct": 19.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 9.71,
+        "p_hat": 0.1859,
+        "retention_pct": 18.6,
+        "threshold": 70.0
+      },
+      {
+        "delta_days": 10.0,
+        "p_hat": 0.1768,
+        "retention_pct": 17.7,
+        "threshold": 70.0
+      }
+    ],
+    "half_life_days": 4.0,
+    "model_spec": {
+      "formula": "h = 2^(\u03b80 + \u03b8_right * n_right + \u03b8_wrong * n_wrong)",
+      "theta": [
+        0.0,
+        1.0,
+        -1.0
+      ],
+      "x": [
+        1.0,
+        4,
+        2
+      ]
+    },
+    "practice_points": [
+      {
+        "date": "Oct 03",
+        "delta_days": 0.0,
+        "p_hat": 0.99,
+        "p_observed": 1.0,
+        "type": "Initial Study"
+      },
+      {
+        "date": "Oct 08",
+        "delta_days": 1.0,
+        "p_hat": 0.781,
+        "p_observed": 0.85,
+        "type": "Quiz #1"
+      },
+      {
+        "date": "Oct 13",
+        "delta_days": 2.5,
+        "p_hat": 0.648,
+        "p_observed": 0.65,
+        "type": "Last Quiz"
+      },
+      {
+        "date": "Oct 15, 12:00",
+        "delta_days": 2.5,
+        "p_hat": 0.648,
+        "p_observed": 0.5,
+        "type": "Session -001"
+      }
+    ],
+    "threshold": 0.7
+  },
+  "dashboard_response": {
+    "daily_study_goal_minutes": 45,
+    "due_concepts_count": 4,
+    "minutes_studied_today": 32,
+    "overall_retention_score": 56.5,
+    "retention_threshold": 0.7,
+    "streak_days": 8,
+    "subjects": [
+      {
+        "avg_p": 0.732,
+        "concepts_count": 4,
+        "due_count": 1,
+        "exam_date": "2026-10-29",
+        "name": "Artificial Intelligence",
+        "priority": 1.4,
+        "strength_percent": 73.2,
+        "weak_count": 1
+      },
+      {
+        "avg_p": 0.44,
+        "concepts_count": 2,
+        "due_count": 1,
+        "exam_date": "2026-11-05",
+        "name": "Operating Systems",
+        "priority": 1.2,
+        "strength_percent": 44.0,
+        "weak_count": 1
+      },
+      {
+        "avg_p": 0.469,
+        "concepts_count": 2,
+        "due_count": 1,
+        "exam_date": "2026-11-14",
+        "name": "Mathematics",
+        "priority": 1.0,
+        "strength_percent": 46.9,
+        "weak_count": 1
+      },
+      {
+        "avg_p": 0.451,
+        "concepts_count": 2,
+        "due_count": 1,
+        "exam_date": "2026-11-12",
+        "name": "Distributed Systems",
+        "priority": 1.3,
+        "strength_percent": 45.1,
+        "weak_count": 1
+      }
+    ],
+    "total_concepts": 10,
+    "weak_concepts_count": 4,
+    "weakest_concepts": [
+      {
+        "delta_days": 5.0,
+        "difficulty": "Hard",
+        "half_life_days": 0.25,
+        "id": "c-ds-1",
+        "is_due": true,
+        "last_practiced_at": "2026-10-10T12:00:00+00:00",
+        "n_right": 1,
+        "n_wrong": 3,
+        "name": "Raft Leader Election & Term Logic",
+        "next_review_at": "2026-10-10T15:05:14.780533+00:00",
+        "p_hat": 0.0001,
+        "subject": "Distributed Systems",
+        "topic": "Consensus"
+      },
+      {
+        "delta_days": 4.1,
+        "difficulty": "Medium",
+        "half_life_days": 0.5,
+        "id": "c-ai-3",
+        "is_due": true,
+        "last_practiced_at": "2026-10-11T09:36:00+00:00",
+        "n_right": 1,
+        "n_wrong": 2,
+        "name": "A* Heuristic Admissibility",
+        "next_review_at": "2026-10-11T15:46:29.561066+00:00",
+        "p_hat": 0.0034,
+        "subject": "Artificial Intelligence",
+        "topic": "Search Algorithms"
+      },
+      {
+        "delta_days": 3.8,
+        "difficulty": "Hard",
+        "half_life_days": 0.5,
+        "id": "c-math-1",
+        "is_due": true,
+        "last_practiced_at": "2026-10-11T16:48:00+00:00",
+        "n_right": 2,
+        "n_wrong": 3,
+        "name": "Eigenvalues and Eigendecomposition",
+        "next_review_at": "2026-10-11T22:58:29.561066+00:00",
+        "p_hat": 0.0052,
+        "subject": "Mathematics",
+        "topic": "Linear Algebra"
+      },
+      {
+        "delta_days": 3.2,
+        "difficulty": "Medium",
+        "half_life_days": 1.0,
+        "id": "c-os-1",
+        "is_due": true,
+        "last_practiced_at": "2026-10-12T07:12:00+00:00",
+        "n_right": 2,
+        "n_wrong": 2,
+        "name": "Page Replacement (LRU vs Clock)",
+        "next_review_at": "2026-10-12T19:32:59.122132+00:00",
+        "p_hat": 0.1088,
+        "subject": "Operating Systems",
+        "topic": "Virtual Memory"
+      }
+    ]
+  },
+  "materials_response": {
+    "concept": {
+      "delta_days": 0.0,
+      "difficulty": "Medium",
+      "half_life_days": 1.0,
+      "id": "<DYNAMIC_ID>",
+      "is_due": false,
+      "last_practiced_at": "2026-10-15T12:00:00+00:00",
+      "n_right": 0,
+      "n_wrong": 0,
+      "name": "Q-Learning & Bellman Optimality",
+      "next_review_at": "2026-10-16T12:00:00+00:00",
+      "p_hat": 0.99,
+      "subject": "Artificial Intelligence",
+      "topic": "Reinforcement Learning"
+    },
+    "generated_questions": [
+      {
+        "answer_index": 0,
+        "concept_id": "<DYNAMIC_ID>",
+        "concept_name": "Q-Learning & Bellman Optimality",
+        "explanation": "Based on the uploaded study material for Q-Learning & Bellman Optimality, the primary invariant guarantees consistency and reliable state progression.",
+        "id": "<DYNAMIC_ID>",
+        "options": [
+          "The primary invariant established by Q-Learning & Bellman Optimality ensures systemic consistency",
+          "It requires strictly uncoordinated manual intervention across replica nodes",
+          "It deprecates all prior state representations without maintaining a delta log",
+          "It operates exclusively on static single-threaded execution boundaries"
+        ],
+        "status": "draft",
+        "subject": "Artificial Intelligence",
+        "text": "Regarding 'Q-Learning & Bellman Optimality' in Reinforcement Learning: What is the core principle or mechanism emphasized in this material?"
+      },
+      {
+        "answer_index": 0,
+        "concept_id": "<DYNAMIC_ID>",
+        "concept_name": "Q-Learning & Bellman Optimality",
+        "explanation": "Graceful parameter decay and prioritizing validated inputs is the standard architectural design pattern documented in this module.",
+        "id": "<DYNAMIC_ID>",
+        "options": [
+          "By gracefully decaying stale parameters and prioritizing fresh updates",
+          "By failing catastrophically without throwing an exception",
+          "By bypassing validation checks to minimize latency at all costs",
+          "By doubling memory consumption exponentially on each iteration"
+        ],
+        "status": "draft",
+        "subject": "Artificial Intelligence",
+        "text": "How does Q-Learning & Bellman Optimality handle boundary constraints or edge cases during execution?"
+      }
+    ],
+    "success": true
+  },
+  "plan_response": {
+    "blocks": [
+      {
+        "allocated_minutes": 10,
+        "avg_p_hat": 0.003,
+        "concepts": [
+          {
+            "delta_days": 4.1,
+            "difficulty": "Medium",
+            "half_life_days": 0.5,
+            "id": "c-ai-3",
+            "is_due": true,
+            "last_practiced_at": "2026-10-11T09:36:00+00:00",
+            "n_right": 1,
+            "n_wrong": 2,
+            "name": "A* Heuristic Admissibility",
+            "next_review_at": "2026-10-11T15:46:29.561066+00:00",
+            "p_hat": 0.0034,
+            "subject": "Artificial Intelligence",
+            "topic": "Search Algorithms"
+          }
+        ],
+        "estimated_questions": 3,
+        "id": "block-artificial-intelligence",
+        "status": "ready",
+        "subject": "Artificial Intelligence"
+      },
+      {
+        "allocated_minutes": 10,
+        "avg_p_hat": 0.005,
+        "concepts": [
+          {
+            "delta_days": 3.8,
+            "difficulty": "Hard",
+            "half_life_days": 0.5,
+            "id": "c-math-1",
+            "is_due": true,
+            "last_practiced_at": "2026-10-11T16:48:00+00:00",
+            "n_right": 2,
+            "n_wrong": 3,
+            "name": "Eigenvalues and Eigendecomposition",
+            "next_review_at": "2026-10-11T22:58:29.561066+00:00",
+            "p_hat": 0.0052,
+            "subject": "Mathematics",
+            "topic": "Linear Algebra"
+          }
+        ],
+        "estimated_questions": 3,
+        "id": "block-mathematics",
+        "status": "ready",
+        "subject": "Mathematics"
+      },
+      {
+        "allocated_minutes": 15,
+        "avg_p_hat": 0.44,
+        "concepts": [
+          {
+            "delta_days": 3.2,
+            "difficulty": "Medium",
+            "half_life_days": 1.0,
+            "id": "c-os-1",
+            "is_due": true,
+            "last_practiced_at": "2026-10-12T07:12:00+00:00",
+            "n_right": 2,
+            "n_wrong": 2,
+            "name": "Page Replacement (LRU vs Clock)",
+            "next_review_at": "2026-10-12T19:32:59.122132+00:00",
+            "p_hat": 0.1088,
+            "subject": "Operating Systems",
+            "topic": "Virtual Memory"
+          },
+          {
+            "delta_days": 6.0,
+            "difficulty": "Hard",
+            "half_life_days": 16.0,
+            "id": "c-os-2",
+            "is_due": false,
+            "last_practiced_at": "2026-10-09T12:00:00+00:00",
+            "n_right": 5,
+            "n_wrong": 1,
+            "name": "Deadlock Coffman Conditions",
+            "next_review_at": "2026-10-17T17:35:45.954120+00:00",
+            "p_hat": 0.7711,
+            "subject": "Operating Systems",
+            "topic": "Concurrency"
+          }
+        ],
+        "estimated_questions": 3,
+        "id": "block-operating-systems",
+        "status": "ready",
+        "subject": "Operating Systems"
+      },
+      {
+        "allocated_minutes": 15,
+        "avg_p_hat": 0.451,
+        "concepts": [
+          {
+            "delta_days": 5.0,
+            "difficulty": "Hard",
+            "half_life_days": 0.25,
+            "id": "c-ds-1",
+            "is_due": true,
+            "last_practiced_at": "2026-10-10T12:00:00+00:00",
+            "n_right": 1,
+            "n_wrong": 3,
+            "name": "Raft Leader Election & Term Logic",
+            "next_review_at": "2026-10-10T15:05:14.780533+00:00",
+            "p_hat": 0.0001,
+            "subject": "Distributed Systems",
+            "topic": "Consensus"
+          },
+          {
+            "delta_days": 1.2,
+            "difficulty": "Medium",
+            "half_life_days": 8.0,
+            "id": "c-ds-2",
+            "is_due": false,
+            "last_practiced_at": "2026-10-14T07:12:00+00:00",
+            "n_right": 3,
+            "n_wrong": 0,
+            "name": "CAP Theorem & PACELC Tradeoffs",
+            "next_review_at": "2026-10-18T09:59:52.977060+00:00",
+            "p_hat": 0.9013,
+            "subject": "Distributed Systems",
+            "topic": "Consistency"
+          }
+        ],
+        "estimated_questions": 3,
+        "id": "block-distributed-systems",
+        "status": "ready",
+        "subject": "Distributed Systems"
+      }
+    ],
+    "daily_minutes_goal": 45,
+    "date": "2026-10-15",
+    "due_concepts_total": 4,
+    "scheduler_algorithm": "HLR Weighted Memory Gradient Optimization",
+    "total_scheduled_minutes": 50
+  }
+}

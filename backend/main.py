@@ -1,41 +1,85 @@
 import math
+import copy
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
+# Clock abstraction for deterministic time testing
+# ---------------------------------------------------------------------------
+_custom_clock = None
+
+def get_current_time() -> datetime:
+    if _custom_clock is not None:
+        return _custom_clock()
+    return datetime.now(timezone.utc)
+
+def set_clock(fn):
+    global _custom_clock
+    _custom_clock = fn
+
+def reset_clock():
+    global _custom_clock
+    _custom_clock = None
+
+def get_current_student(
+    x_student_id: Optional[str] = Header(None, alias="X-Student-Id")
+) -> str:
+    """Authenticates student identity via X-Student-Id header."""
+    if not x_student_id:
+        raise HTTPException(status_code=401, detail="Missing student identity header X-Student-Id")
+    return x_student_id
+
+# ---------------------------------------------------------------------------
 # HLR Constants & Core Math (Duolingo Settles & Meeder, 2016)
 # ---------------------------------------------------------------------------
-H_MIN: float = 15.0 / 1440.0   # 15 minutes in days
-H_MAX: float = 270.0          # ~9 months
-P_MIN: float = 0.0001
-P_MAX: float = 0.9999
-DEFAULT_THRESHOLD: float = 0.70
+from hlr.config import HLRConfig
+from hlr.predictor import (
+    predict_half_life,
+    predict_recall,
+    predict_next_review_days,
+    raw_log2_half_life,
+)
+from hlr.features import (
+    ConceptCounts,
+    RAW_SPEC,
+    extract_features,
+)
+
+_GLOBAL_HLR_CONFIG = HLRConfig()
+H_MIN: float = _GLOBAL_HLR_CONFIG.h_min_days
+H_MAX: float = _GLOBAL_HLR_CONFIG.h_max_days
+P_MIN: float = _GLOBAL_HLR_CONFIG.p_min
+P_MAX: float = _GLOBAL_HLR_CONFIG.p_max
+DEFAULT_THRESHOLD: float = _GLOBAL_HLR_CONFIG.review_threshold
+
+from hlr.updater import (
+    HLR_V0_FIXED,
+    compute_state,
+    apply_outcome,
+)
+from learning.session_aggregator import aggregate_session_attempts
+from learning.training_record_builder import build_training_record
+from repositories import get_uow
 
 # Launch model: intercept = 0 (1 day base), right = +1 (each correct doubles h), wrong = -1 (halves h)
-LAUNCH_THETA = [0.0, 1.0, -1.0]
+LAUNCH_THETA = HLR_V0_FIXED.theta
 
 def half_life(theta: List[float], x: List[float]) -> float:
-    """Computes half-life h = 2^(theta . x) clamped to [H_MIN, H_MAX]."""
-    exponent = sum(t * v for t, v in zip(theta, x))
-    h = 2.0 ** exponent
-    return min(max(h, H_MIN), H_MAX)
+    """Legacy backward-compatible wrapper delegating to predict_half_life."""
+    return predict_half_life(theta, x, _GLOBAL_HLR_CONFIG)
 
 def recall_prob(h: float, delta_days: float) -> float:
-    """Computes recall probability p_hat = 2^(-delta / h) clamped to [P_MIN, P_MAX]."""
-    if h <= 0:
-        return P_MIN
-    p = 2.0 ** (-max(0.0, delta_days) / h)
-    return min(max(p, P_MIN), P_MAX)
+    """Legacy backward-compatible wrapper. Clamps negative delta to 0 per legacy behavior."""
+    return predict_recall(h, max(0.0, delta_days), _GLOBAL_HLR_CONFIG) if h > 0 else P_MIN
 
 def next_review_days(h: float, threshold: float = DEFAULT_THRESHOLD) -> float:
-    """Returns days until recall falls to the target retention threshold."""
-    if threshold <= 0 or threshold >= 1:
-        threshold = DEFAULT_THRESHOLD
-    return -h * math.log2(threshold)
+    """Legacy backward-compatible wrapper. Resets out-of-bound threshold to default."""
+    th = DEFAULT_THRESHOLD if (threshold <= 0 or threshold >= 1) else threshold
+    return predict_next_review_days(h, th, _GLOBAL_HLR_CONFIG)
 
 # ---------------------------------------------------------------------------
 # Models
@@ -78,9 +122,10 @@ class SessionAnswerRequest(BaseModel):
     event_id: str
     concept_id: str
     question_id: str
-    is_correct: bool
+    is_correct: bool = True
     selected_index: int
     response_time_ms: int = 1500
+    answered_at: Optional[str] = None
 
 class StartQuizRequest(BaseModel):
     subject: Optional[str] = None
@@ -103,16 +148,16 @@ class UserSettings(BaseModel):
         "Distributed Systems": 1.3
     }
     exam_dates: Dict[str, str] = {
-        "Artificial Intelligence": (datetime.now(timezone.utc) + timedelta(days=14)).strftime("%Y-%m-%d"),
-        "Operating Systems": (datetime.now(timezone.utc) + timedelta(days=21)).strftime("%Y-%m-%d"),
-        "Mathematics": (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d"),
-        "Distributed Systems": (datetime.now(timezone.utc) + timedelta(days=28)).strftime("%Y-%m-%d"),
+        "Artificial Intelligence": (get_current_time() + timedelta(days=14)).strftime("%Y-%m-%d"),
+        "Operating Systems": (get_current_time() + timedelta(days=21)).strftime("%Y-%m-%d"),
+        "Mathematics": (get_current_time() + timedelta(days=30)).strftime("%Y-%m-%d"),
+        "Distributed Systems": (get_current_time() + timedelta(days=28)).strftime("%Y-%m-%d"),
     }
 
 # ---------------------------------------------------------------------------
 # In-Memory Database Seed
 # ---------------------------------------------------------------------------
-NOW = datetime.now(timezone.utc)
+NOW = get_current_time()
 
 INITIAL_CONCEPTS = [
     {
@@ -360,14 +405,25 @@ db_questions: List[Dict[str, Any]] = [q.copy() for q in INITIAL_QUESTIONS]
 db_attempts: List[Dict[str, Any]] = []
 db_sessions: Dict[str, Dict[str, Any]] = {}
 db_settings = UserSettings()
+db_training_records: List[Dict[str, Any]] = []
 
 # Practice history records for forgetting curves (simulated past review checkpoints)
 db_practice_history: Dict[str, List[Dict[str, Any]]] = {}
 
 def init_db():
+    global NOW, db_concepts, db_questions, db_attempts, db_sessions, db_practice_history, db_settings, db_training_records
+    NOW = get_current_time()
+    db_concepts.clear()
+    db_questions.clear()
+    db_questions.extend([q.copy() for q in INITIAL_QUESTIONS])
+    db_attempts.clear()
+    db_sessions.clear()
+    db_training_records.clear()
+    db_practice_history.clear()
+    db_settings = UserSettings()
     for item in INITIAL_CONCEPTS:
         c_id = item["id"]
-        x = [1.0, float(item["n_right"]), float(item["n_wrong"])]
+        x = extract_features(ConceptCounts(item["n_right"], item["n_wrong"]), RAW_SPEC)
         h = half_life(LAUNCH_THETA, x)
         delta = float(item["days_ago"])
         p = recall_prob(h, delta)
@@ -419,6 +475,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from routers.admin_ml import router as admin_router
+app.include_router(admin_router)
+
 # ---------------------------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------------------------
@@ -430,7 +489,7 @@ def health() -> Dict[str, Any]:
         "engine": "Half-Life Regression (HLR)",
         "concepts_count": len(db_concepts),
         "questions_count": len(db_questions),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": get_current_time().isoformat()
     }
 
 @app.get("/api/dashboard")
@@ -446,7 +505,7 @@ def get_dashboard() -> Dict[str, Any]:
     subjects_map: Dict[str, Dict[str, Any]] = {}
     for c in concepts:
         last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
+        delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
         c["delta_days"] = round(delta, 2)
         c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
         c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
@@ -516,7 +575,7 @@ def get_concepts(subject: Optional[str] = None) -> List[Dict[str, Any]]:
         concepts = [c for c in concepts if c["subject"].lower() == subject.lower()]
     for c in concepts:
         last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
+        delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
         c["delta_days"] = round(delta, 2)
         c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
         c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
@@ -546,7 +605,7 @@ def get_concept_curve(concept_id: str) -> Dict[str, Any]:
         })
 
     last_dt = datetime.fromisoformat(c["last_practiced_at"])
-    curr_delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
+    curr_delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
     current_p = recall_prob(h, curr_delta)
     
     practice_points = db_practice_history.get(concept_id, [])
@@ -561,7 +620,7 @@ def get_concept_curve(concept_id: str) -> Dict[str, Any]:
         "practice_points": practice_points,
         "model_spec": {
             "theta": LAUNCH_THETA,
-            "x": [1.0, c["n_right"], c["n_wrong"]],
+            "x": extract_features(ConceptCounts(c["n_right"], c["n_wrong"]), RAW_SPEC),
             "formula": "h = 2^(θ0 + θ_right * n_right + θ_wrong * n_wrong)"
         }
     }
@@ -607,10 +666,10 @@ def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
         "difficulty": "Medium",
         "n_right": 0,
         "n_wrong": 0,
-        "last_practiced_at": datetime.now(timezone.utc).isoformat(),
+        "last_practiced_at": get_current_time().isoformat(),
         "half_life_days": 1.0,
         "p_hat": 0.99,
-        "next_review_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        "next_review_at": (get_current_time() + timedelta(days=1)).isoformat(),
         "is_due": False,
         "delta_days": 0.0
     }
@@ -671,7 +730,7 @@ def get_today_plan() -> Dict[str, Any]:
     concepts = list(db_concepts.values())
     for c in concepts:
         last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0)
+        delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
         c["delta_days"] = round(delta, 2)
         c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
         c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
@@ -724,7 +783,7 @@ def get_today_plan() -> Dict[str, Any]:
     blocks = sorted(blocks, key=lambda b: b["avg_p_hat"])
 
     return {
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "date": get_current_time().strftime("%Y-%m-%d"),
         "daily_minutes_goal": daily_mins,
         "total_scheduled_minutes": total_allocated_minutes,
         "due_concepts_total": sum(1 for c in concepts if c["is_due"]),
@@ -736,7 +795,7 @@ def get_today_plan() -> Dict[str, Any]:
 def get_week_plan() -> Dict[str, Any]:
     """Generates 7-day adaptive forecast based on current half-lives."""
     days = []
-    today = datetime.now(timezone.utc)
+    today = get_current_time()
     for i in range(7):
         day_date = today + timedelta(days=i)
         # forecast concepts that will fall below threshold at day i
@@ -786,7 +845,7 @@ def start_quiz(req: StartQuizRequest) -> Dict[str, Any]:
     session_id = f"sess-{uuid.uuid4().hex[:8]}"
     db_sessions[session_id] = {
         "id": session_id,
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": get_current_time().isoformat(),
         "questions": selected,
         "attempts": []
     }
@@ -797,116 +856,268 @@ def start_quiz(req: StartQuizRequest) -> Dict[str, Any]:
         "total_questions": len(selected)
     }
 
-@app.post("/api/sessions/{session_id}/answers")
-def record_answer(session_id: str, req: SessionAnswerRequest) -> Dict[str, Any]:
-    """Records an answered question event idempotently."""
-    attempt_record = req.dict()
-    attempt_record["recorded_at"] = datetime.now(timezone.utc).isoformat()
-    db_attempts.append(attempt_record)
-    
-    if session_id in db_sessions:
-        db_sessions[session_id]["attempts"].append(attempt_record)
-        
-    # Return instantaneous HLR feedback for the answered concept
-    c = db_concepts.get(req.concept_id)
-    if c:
-        old_h = c["half_life_days"]
-        # Fast preview of half-life update: correct multiplies h, wrong reduces it
-        projected_h = half_life(
-            LAUNCH_THETA,
-            [1.0, float(c["n_right"] + (1 if req.is_correct else 0)), float(c["n_wrong"] + (0 if req.is_correct else 1))]
-        )
-        return {
+@app.post("/api/sessions/{session_id}/answers", status_code=200)
+def record_answer(
+    session_id: str,
+    req: SessionAnswerRequest,
+    student_id: str = Depends(get_current_student)
+) -> Dict[str, Any]:
+    """Records an answered question event idempotently, validating session and server-scoring."""
+    now_dt = get_current_time()
+    answered_dt = now_dt
+    if req.answered_at:
+        try:
+            parsed = datetime.fromisoformat(req.answered_at)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if (parsed - now_dt).total_seconds() > 300:
+                raise HTTPException(status_code=422, detail="answered_at cannot be more than 5 minutes in future")
+            answered_dt = parsed
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid answered_at timestamp")
+
+    # Verify question exists and is approved
+    q = next((item for item in db_questions if item["id"] == req.question_id), None)
+    if not q:
+        raise HTTPException(status_code=422, detail=f"Question '{req.question_id}' not found")
+    if q.get("status") != "approved":
+        raise HTTPException(status_code=422, detail=f"Question '{req.question_id}' is not approved (status={q.get('status')})")
+
+    concept_id = q["concept_id"]
+    server_correct = bool(req.selected_index == q["answer_index"])
+
+    sess = db_sessions.get(session_id)
+    if sess:
+        if sess.get("student_id") and sess.get("student_id") != student_id:
+            raise HTTPException(status_code=403, detail="Session belongs to another student")
+        if sess.get("status") in ("completed", "cancelled"):
+            raise HTTPException(status_code=409, detail="Session is already completed or cancelled")
+    else:
+        db_sessions[session_id] = {
+            "id": session_id,
+            "student_id": student_id,
+            "started_at": now_dt.isoformat(),
+            "status": "open",
+            "attempts": []
+        }
+        sess = db_sessions[session_id]
+
+    existing = next((a for a in db_attempts if a["event_id"] == req.event_id), None)
+    if existing:
+        if existing.get("student_id") != student_id:
+            raise HTTPException(status_code=403, detail="Event ID belongs to another student")
+        return existing.get("cached_response", {
             "recorded": True,
             "event_id": req.event_id,
-            "is_correct": req.is_correct,
+            "is_correct": existing.get("is_correct", server_correct)
+        })
+
+    c = db_concepts.get(concept_id)
+    if c:
+        old_h = c["half_life_days"]
+        proj_counts = ConceptCounts(
+            c["n_right"] + (1 if server_correct else 0),
+            c["n_wrong"] + (0 if server_correct else 1)
+        )
+        projected_h = half_life(
+            LAUNCH_THETA,
+            extract_features(proj_counts, RAW_SPEC)
+        )
+        resp = {
+            "recorded": True,
+            "event_id": req.event_id,
+            "is_correct": server_correct,
             "old_half_life": old_h,
             "projected_half_life": round(projected_h, 3),
             "h_change_pct": round(((projected_h - old_h) / old_h) * 100, 1)
         }
+    else:
+        resp = {
+            "recorded": True,
+            "event_id": req.event_id,
+            "is_correct": server_correct
+        }
 
-    return {"recorded": True, "event_id": req.event_id}
+    attempt_record = req.dict()
+    attempt_record["student_id"] = student_id
+    attempt_record["is_correct"] = server_correct
+    attempt_record["concept_id"] = concept_id
+    attempt_record["recorded_at"] = answered_dt.isoformat()
+    attempt_record["cached_response"] = resp
+
+    db_attempts.append(attempt_record)
+    sess["attempts"].append(attempt_record)
+
+    return resp
 
 @app.post("/api/sessions/{session_id}/complete")
-def complete_session(session_id: str) -> Dict[str, Any]:
+def complete_session(
+    session_id: str,
+    x_student_id: Optional[str] = Header(None, alias="X-Student-Id")
+) -> Dict[str, Any]:
     """
-    Session close (Section 5 per concept):
-    1. p = correct / attempts in the session.
-    2. Delta = now - last_practiced_at.
-    3. Save training_record(p, Delta, x_before).
-    4. Update counts, compute h_hat with active Theta, and set next_review_at.
+    Session completion pipeline:
+    1. Lock session. If already completed, return stored result_json idempotently.
+    2. Group scored attempts by concept using session_aggregator.
+    3. If practiced before, build and persist training_record holding p_session.
+    4. Apply outcomes, compute new state with active model, update concept state and practice history.
+    5. Mark session completed and return result_json. Rollback on failure.
     """
     sess = db_sessions.get(session_id)
-    attempts = sess["attempts"] if sess else [a for a in db_attempts[-5:]]
-    
-    now_dt = datetime.now(timezone.utc)
-    concept_stats: Dict[str, Dict[str, int]] = {}
-    for a in attempts:
-        cid = a["concept_id"]
-        if cid not in concept_stats:
-            concept_stats[cid] = {"correct": 0, "total": 0}
-        concept_stats[cid]["total"] += 1
-        if a["is_correct"]:
-            concept_stats[cid]["correct"] += 1
+    if sess and sess.get("status") == "completed" and sess.get("result_json"):
+        return sess["result_json"]
 
-    updates = []
-    for cid, stats in concept_stats.items():
-        if cid not in db_concepts:
-            continue
-        c = db_concepts[cid]
-        p_session = stats["correct"] / stats["total"]
-        
-        last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta_days = max(0.01, (now_dt - last_dt).total_seconds() / 86400.0)
-        
-        old_h = c["half_life_days"]
-        
-        # Update counts
-        c["n_right"] += stats["correct"]
-        c["n_wrong"] += (stats["total"] - stats["correct"])
-        c["last_practiced_at"] = now_dt.isoformat()
-        
-        # Compute new half_life
-        new_x = [1.0, float(c["n_right"]), float(c["n_wrong"])]
-        new_h = half_life(LAUNCH_THETA, new_x)
-        c["half_life_days"] = round(new_h, 3)
-        c["p_hat"] = 0.99  # immediately after practice, recall is near maximum
-        
-        # Next review
-        review_days = next_review_days(new_h, db_settings.retention_threshold)
-        next_dt = now_dt + timedelta(days=review_days)
-        c["next_review_at"] = next_dt.isoformat()
-        c["is_due"] = False
-        
-        # Save training record and add point to practice history
-        if cid not in db_practice_history:
-            db_practice_history[cid] = []
-        db_practice_history[cid].append({
-            "delta_days": round(delta_days, 2),
-            "p_observed": round(p_session, 2),
-            "p_hat": round(recall_prob(old_h, delta_days), 3),
-            "type": f"Session {session_id[-4:]}",
-            "date": now_dt.strftime("%b %d, %H:%M")
-        })
+    student_id = x_student_id or (sess.get("student_id") if sess else "std-default")
+    now_dt = get_current_time()
+    attempts = sess["attempts"] if (sess and sess.get("attempts")) else [a for a in db_attempts[-5:]]
 
-        updates.append({
-            "concept_id": cid,
-            "concept_name": c["name"],
-            "subject": c["subject"],
-            "session_score": f"{stats['correct']}/{stats['total']}",
-            "old_half_life": old_h,
-            "new_half_life": round(new_h, 3),
-            "next_review_days": round(review_days, 1),
-            "next_review_date": next_dt.strftime("%b %d")
-        })
+    stats_by_concept = aggregate_session_attempts(attempts)
 
-    return {
-        "success": True,
-        "session_id": session_id,
-        "completed_at": now_dt.isoformat(),
-        "total_attempts": len(attempts),
-        "concept_updates": updates
-    }
+    # Rollback snapshot in case of failure
+    concepts_snapshot = copy.deepcopy(db_concepts)
+    history_snapshot = copy.deepcopy(db_practice_history)
+    records_snapshot = copy.deepcopy(db_training_records)
+
+    try:
+        with get_uow() as uow:
+            _, active_model = GLOBAL_REGISTRY.load_active_model(uow)
+            all_models = uow.models.list_all()
+            candidate_models = [m for m in all_models if not m.active and m.validation_status in ("candidate", "passed")]
+
+        updates = []
+        for cid, stats in stats_by_concept.items():
+            if cid not in db_concepts:
+                continue
+            c = db_concepts[cid]
+            counts_before = ConceptCounts(c["n_right"], c["n_wrong"])
+            old_h = c["half_life_days"]
+
+            last_dt = datetime.fromisoformat(c["last_practiced_at"]) if c.get("last_practiced_at") else None
+            is_first_practice = (counts_before.n_right + counts_before.n_wrong == 0) or (last_dt is None)
+
+            if not is_first_practice and last_dt is not None:
+                delta_days = max(0.01, (now_dt - last_dt).total_seconds() / 86400.0)
+                # Build and persist training record
+                t_rec = build_training_record(
+                    student_id=student_id,
+                    concept_id=cid,
+                    session_id=session_id,
+                    stats=stats,
+                    counts_before=counts_before,
+                    last_practiced_at=last_dt,
+                    completed_at=now_dt,
+                    model=active_model,
+                    context_before={"difficulty": c.get("difficulty")}
+                )
+                db_training_records.append({
+                    "student_id": t_rec.student_id,
+                    "concept_id": t_rec.concept_id,
+                    "session_id": t_rec.session_id,
+                    "p_observed": t_rec.p_observed,
+                    "n_answers": t_rec.n_answers,
+                    "delta_days": t_rec.delta_days,
+                    "counts_before": t_rec.counts_before,
+                    "x_before": t_rec.x_before,
+                    "feature_spec_name": t_rec.feature_spec_name,
+                    "model_version": t_rec.model_version,
+                    "source_event_ids": t_rec.source_event_ids,
+                    "created_at": t_rec.created_at.isoformat()
+                })
+            else:
+                delta_days = 0.0
+
+            # Increment counts and compute state
+            new_counts = apply_outcome(counts_before, stats.correct, stats.total - stats.correct)
+            c["n_right"] = new_counts.n_right
+            c["n_wrong"] = new_counts.n_wrong
+            c["last_practiced_at"] = now_dt.isoformat()
+
+            state = compute_state(
+                counts=new_counts,
+                model=active_model,
+                last_practiced_at=now_dt,
+                now=now_dt,
+                threshold=db_settings.retention_threshold
+            )
+            new_h = state.half_life_days
+            next_dt = state.next_review_at
+            review_days = next_review_days(new_h, db_settings.retention_threshold)
+
+            c["half_life_days"] = round(new_h, 3)
+            c["p_hat"] = 0.99
+            c["next_review_at"] = next_dt.isoformat()
+            c["is_due"] = False
+
+            # Shadow mode predictions for any candidate models (never used for scheduling)
+            for cand in candidate_models:
+                try:
+                    c_spec = get_spec(cand.feature_spec["name"])
+                    c_x = extract_features(new_counts, c_spec)
+                    c_h = predict_half_life(cand.theta, c_x, active_model.config)
+                    c_p = predict_recall(c_h, 0.0, active_model.config)
+                    GLOBAL_REGISTRY.record_shadow_prediction(
+                        session_id=session_id,
+                        student_id=student_id,
+                        concept_id=cid,
+                        active_prediction=0.99,
+                        candidate_model_id=cand.id,
+                        candidate_prediction=round(c_p, 4)
+                    )
+                except Exception:
+                    pass
+
+            if cid not in db_practice_history:
+                db_practice_history[cid] = []
+            db_practice_history[cid].append({
+                "delta_days": round(delta_days, 2),
+                "p_observed": round(stats.p_session, 2),
+                "p_hat": round(recall_prob(old_h, delta_days), 3),
+                "type": f"Session {session_id[-4:]}",
+                "date": now_dt.strftime("%b %d, %H:%M")
+            })
+
+            updates.append({
+                "concept_id": cid,
+                "concept_name": c["name"],
+                "subject": c["subject"],
+                "session_score": f"{stats.correct}/{stats.total}",
+                "old_half_life": old_h,
+                "new_half_life": round(new_h, 3),
+                "next_review_days": round(review_days, 1),
+                "next_review_date": next_dt.strftime("%b %d")
+            })
+
+        res_json = {
+            "success": True,
+            "session_id": session_id,
+            "completed_at": now_dt.isoformat(),
+            "total_attempts": len(attempts),
+            "concept_updates": updates
+        }
+
+        if sess:
+            sess["status"] = "completed"
+            sess["completed_at"] = now_dt.isoformat()
+            sess["result_json"] = res_json
+        else:
+            db_sessions[session_id] = {
+                "id": session_id,
+                "student_id": student_id,
+                "status": "completed",
+                "completed_at": now_dt.isoformat(),
+                "result_json": res_json,
+                "attempts": attempts
+            }
+
+        return res_json
+    except Exception:
+        db_concepts.clear()
+        db_concepts.update(concepts_snapshot)
+        db_practice_history.clear()
+        db_practice_history.update(history_snapshot)
+        db_training_records.clear()
+        db_training_records.extend(records_snapshot)
+        raise
 
 @app.get("/api/settings")
 def get_settings() -> UserSettings:
@@ -918,34 +1129,39 @@ def update_settings(settings: UserSettings) -> UserSettings:
     db_settings = settings
     return db_settings
 
+from ml.model_registry import GLOBAL_REGISTRY
+
 @app.get("/api/models")
 def get_models() -> Dict[str, Any]:
-    """Returns active model versions and feature specifications."""
-    return {
-        "active_model_id": "hlr-launch-v1",
-        "models": [
-            {
-                "id": "hlr-launch-v1",
-                "name": "Launch Model (Raw Counts)",
-                "active": True,
-                "feature_spec": "x = [1, n_right, n_wrong]",
-                "theta": LAUNCH_THETA,
-                "theta_labels": ["Intercept (θ0)", "Success (θ_right)", "Failure (θ_wrong)"],
+    """Returns active model versions and feature specifications from the model registry."""
+    with get_uow() as uow:
+        models = GLOBAL_REGISTRY.list_models(uow)
+        active_rec = uow.models.get_active() or GLOBAL_REGISTRY.seed_default_model(uow)
+
+        models_out = []
+        for m in models:
+            names = m.feature_spec.get("feature_names", ["intercept", "n_right", "n_wrong"])
+            feature_spec_str = "x = [" + ", ".join(names) + "]"
+            theta_labels = ["Intercept (θ0)", "Success (θ_right)", "Failure (θ_wrong)"]
+            if len(names) > 3:
+                theta_labels.extend([f"Feature ({n})" for n in names[3:]])
+
+            models_out.append({
+                "id": m.id,
+                "name": m.name,
+                "active": m.active,
+                "status": m.validation_status,
+                "feature_spec": feature_spec_str,
+                "theta": m.theta,
+                "theta_labels": theta_labels,
                 "bounds": {"h_min_days": H_MIN, "h_max_days": H_MAX, "p_min": P_MIN, "p_max": P_MAX},
-                "loss_metric": "Half-life Log-Loss MAE: 0.124"
-            },
-            {
-                "id": "hlr-trained-sqrt-v2",
-                "name": "Trained Model (√Counts - Settles & Meeder)",
-                "active": False,
-                "feature_spec": "x = [1, sqrt(n_right), sqrt(n_wrong)]",
-                "theta": [0.15, 1.42, -1.18],
-                "theta_labels": ["Intercept (θ0)", "Success (θ_right)", "Failure (θ_wrong)"],
-                "bounds": {"h_min_days": H_MIN, "h_max_days": H_MAX, "p_min": P_MIN, "p_max": P_MAX},
-                "loss_metric": "AdaGrad Offline MAE: 0.089, AUC: 0.812"
-            }
-        ]
-    }
+                "metrics": m.evaluation_metrics
+            })
+
+        return {
+            "active_model_id": active_rec.id,
+            "models": models_out
+        }
 
 # ---------------------------------------------------------------------------
 # Backwards-compatibility for existing schedule endpoint if called
@@ -983,7 +1199,7 @@ def legacy_schedule(request: LegacyScheduleRequest):
             "status": task.status
         })
     return {
-        "generated_on": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "generated_on": get_current_time().strftime("%Y-%m-%d"),
         "total_slots": len(request.available_slots),
         "scheduled_slots": len(output),
         "completion_percent": 100,
