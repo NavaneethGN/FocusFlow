@@ -416,7 +416,15 @@ app = FastAPI(
 
 from app.core.config import settings
 from app.core.database import engine, Base, SessionLocal
-from app.models.models import User, Subject, Concept, Question, ConceptState, ModelVersion, UserSettings
+from app.models.models import (
+    User as DBUser,
+    Subject as DBSubject,
+    Concept as DBConcept,
+    Question as DBQuestion,
+    ConceptState as DBConceptState,
+    ModelVersion as DBModelVersion,
+    UserSettings as DBUserSettings,
+)
 from app.services.hlr import DEFAULT_LAUNCH_THETA, DEFAULT_FEATURE_SPEC
 
 # Routers
@@ -428,9 +436,9 @@ def seed_initial_data():
     db = SessionLocal()
     try:
         # 1. Active model version
-        active_model = db.query(ModelVersion).filter(ModelVersion.version_name == "hlr-launch-v1").first()
+        active_model = db.query(DBModelVersion).filter(DBModelVersion.version_name == "hlr-launch-v1").first()
         if not active_model:
-            launch_model = ModelVersion(
+            launch_model = DBModelVersion(
                 version_name="hlr-launch-v1",
                 theta=DEFAULT_LAUNCH_THETA,
                 feature_spec=DEFAULT_FEATURE_SPEC,
@@ -441,14 +449,14 @@ def seed_initial_data():
             db.add(launch_model)
 
         # 2. Default user
-        user = db.query(User).filter(User.id == 1).first()
+        user = db.query(DBUser).filter(DBUser.id == 1).first()
         if not user:
-            user = User(id=1, username="alex_learner", email="alex@focusflow.ai")
+            user = DBUser(id=1, username="alex_learner", email="alex@focusflow.ai")
             db.add(user)
             db.flush()
 
             # Default settings
-            user_settings = UserSettings(
+            user_settings = DBUserSettings(
                 user_id=user.id,
                 daily_minutes=60,
                 subject_priorities={"1": 1.2, "2": 1.0, "3": 1.5},
@@ -457,26 +465,26 @@ def seed_initial_data():
             db.add(user_settings)
 
             # Sample subjects
-            subj_cs = Subject(id=1, user_id=user.id, name="Computer Systems & OS", color="#3b82f6", priority_weight=1.2)
-            subj_math = Subject(id=2, user_id=user.id, name="Probability & Linear Algebra", color="#10b981", priority_weight=1.0)
-            subj_ml = Subject(id=3, user_id=user.id, name="Machine Learning Fundamentals", color="#8b5cf6", priority_weight=1.5)
+            subj_cs = DBSubject(id=1, user_id=user.id, name="Computer Systems & OS", color="#3b82f6", priority_weight=1.2)
+            subj_math = DBSubject(id=2, user_id=user.id, name="Probability & Linear Algebra", color="#10b981", priority_weight=1.0)
+            subj_ml = DBSubject(id=3, user_id=user.id, name="Machine Learning Fundamentals", color="#8b5cf6", priority_weight=1.5)
             db.add_all([subj_cs, subj_math, subj_ml])
             db.flush()
 
             # Sample concepts and questions for ML & OS
-            c1 = Concept(
+            c1 = DBConcept(
                 id=1,
                 subject_id=subj_ml.id,
                 name="Half-Life Regression (HLR)",
                 description="Duolingo's model estimating memory half-life h using logistic regression on practice features.",
             )
-            c2 = Concept(
+            c2 = DBConcept(
                 id=2,
                 subject_id=subj_ml.id,
                 name="Exponential Forgetting Curve",
                 description="Ebbinghaus retention model where recall probability decays as 2^(-delta / h).",
             )
-            c3 = Concept(
+            c3 = DBConcept(
                 id=3,
                 subject_id=subj_cs.id,
                 name="Virtual Memory & Paging",
@@ -486,7 +494,7 @@ def seed_initial_data():
             db.flush()
 
             # Questions
-            q1 = Question(
+            q1 = DBQuestion(
                 concept_id=c1.id,
                 text="In Half-Life Regression, when the elapsed time Δ equals the estimated half-life ĥ, what is the recall probability p̂?",
                 options=["0.50 (50%)", "0.70 (70%)", "1.00 (100%)", "0.25 (25%)"],
@@ -494,7 +502,7 @@ def seed_initial_data():
                 explanation="By definition of half-life, p = 2^(-Δ/h). When Δ = h, p = 2^(-1) = 0.5.",
                 status="approved",
             )
-            q2 = Question(
+            q2 = DBQuestion(
                 concept_id=c1.id,
                 text="Which transformation was used in the original Duolingo paper for practice counts?",
                 options=["Square root of counts (√n)", "Logarithmic counts (log(n))", "Raw counts (n)", "Softmax scaling"],
@@ -502,7 +510,7 @@ def seed_initial_data():
                 explanation="The original Settles & Meeder (2016) paper found that square root counts (√n_correct, √n_incorrect) captured diminishing returns best.",
                 status="approved",
             )
-            q3 = Question(
+            q3 = DBQuestion(
                 concept_id=c2.id,
                 text="What is the recommended review interval Δ for a memory half-life h at target retention threshold 0.7?",
                 options=["-h * log2(0.7) ≈ 0.51 * h", "h / 2", "2 * h", "h * ln(0.7)"],
@@ -510,7 +518,7 @@ def seed_initial_data():
                 explanation="Solving 2^(-Δ/h) = 0.7 yields -Δ/h = log2(0.7) => Δ = -h * log2(0.7) ≈ 0.514 * h.",
                 status="approved",
             )
-            q4 = Question(
+            q4 = DBQuestion(
                 concept_id=c3.id,
                 text="What is the primary role of a Translation Lookaside Buffer (TLB)?",
                 options=[
@@ -526,9 +534,9 @@ def seed_initial_data():
             db.add_all([q1, q2, q3, q4])
 
             # Seed concept states
-            cs1 = ConceptState(user_id=user.id, concept_id=c1.id, total_correct=2, total_incorrect=0, h_hat=8.0, p_hat_cached=0.85)
-            cs2 = ConceptState(user_id=user.id, concept_id=c2.id, total_correct=1, total_incorrect=1, h_hat=2.0, p_hat_cached=0.48)
-            cs3 = ConceptState(user_id=user.id, concept_id=c3.id, total_correct=0, total_incorrect=0, h_hat=2.0, p_hat_cached=0.50)
+            cs1 = DBConceptState(user_id=user.id, concept_id=c1.id, total_correct=2, total_incorrect=0, h_hat=8.0, p_hat_cached=0.85)
+            cs2 = DBConceptState(user_id=user.id, concept_id=c2.id, total_correct=1, total_incorrect=1, h_hat=2.0, p_hat_cached=0.48)
+            cs3 = DBConceptState(user_id=user.id, concept_id=c3.id, total_correct=0, total_incorrect=0, h_hat=2.0, p_hat_cached=0.50)
             db.add_all([cs1, cs2, cs3])
 
         db.commit()
@@ -554,7 +562,6 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],

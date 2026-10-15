@@ -1,5 +1,15 @@
 import os
+from pathlib import Path
 from pydantic import BaseModel
+
+try:
+    from dotenv import load_dotenv
+    # Load .env from backend directory or project root
+    backend_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(dotenv_path=backend_env)
+    load_dotenv()
+except ImportError:
+    pass
 
 
 class Settings(BaseModel):
