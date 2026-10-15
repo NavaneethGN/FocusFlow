@@ -96,6 +96,11 @@ class MaterialUploadRequest(BaseModel):
     title: str
     content: str
 
+class ExplainRequest(BaseModel):
+    concept_name: str
+    topic: str = ""
+    context: str = ""
+
 class UserSettings(BaseModel):
     daily_minutes: int = 45
     retention_threshold: float = 0.70
@@ -426,6 +431,7 @@ from app.models.models import (
     UserSettings as DBUserSettings,
 )
 from app.services.hlr import DEFAULT_LAUNCH_THETA, DEFAULT_FEATURE_SPEC
+from app.services.quiz_gen import generate_concepts_and_questions, explain_concept_with_gemini, test_gemini_connection
 
 # Routers
 from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router
@@ -743,13 +749,23 @@ def update_question_status(question_id: str, payload: Dict[str, Any]) -> Dict[st
             return q
     raise HTTPException(status_code=404, detail="Question not found")
 
+@app.get("/api/ai/status")
+async def get_ai_status():
+    """Returns real-time status of the Gemini AI integration."""
+    return await test_gemini_connection()
+
+@app.post("/api/ai/explain")
+async def explain_concept(req: ExplainRequest) -> Dict[str, Any]:
+    """Provides cognitive breakdown, mental models, mnemonics, and real-world analogies using Gemini."""
+    return await explain_concept_with_gemini(req.concept_name, req.topic, req.context)
+
 @app.post("/api/materials")
-def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
-    """Upload study notes, extract concepts and synthesize questions."""
-    concept_id = f"c-{uuid.uuid4().hex[:6]}"
-    
-    new_concept = {
-        "id": concept_id,
+async def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
+    """Upload study notes, extract concepts and synthesize questions using Gemini AI."""
+    # 1. Primary concept
+    primary_concept_id = f"c-{uuid.uuid4().hex[:6]}"
+    primary_concept = {
+        "id": primary_concept_id,
         "subject": req.subject,
         "topic": req.topic,
         "name": req.title,
@@ -763,49 +779,82 @@ def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
         "is_due": False,
         "delta_days": 0.0
     }
-    db_concepts[concept_id] = new_concept
+    db_concepts[primary_concept_id] = primary_concept
+
+    # 2. Extract concepts & questions via Gemini (with fallback)
+    extracted = await generate_concepts_and_questions(req.title, req.content)
     
-    # Generate 2 smart synthesized questions for this material
-    generated_q1 = {
-        "id": f"q-{uuid.uuid4().hex[:6]}",
-        "concept_id": concept_id,
-        "concept_name": req.title,
-        "subject": req.subject,
-        "text": f"Regarding '{req.title}' in {req.topic}: What is the core principle or mechanism emphasized in this material?",
-        "options": [
-            f"The primary invariant established by {req.title} ensures systemic consistency",
-            "It requires strictly uncoordinated manual intervention across replica nodes",
-            "It deprecates all prior state representations without maintaining a delta log",
-            "It operates exclusively on static single-threaded execution boundaries"
-        ],
-        "answer_index": 0,
-        "explanation": f"Based on the uploaded study material for {req.title}, the primary invariant guarantees consistency and reliable state progression.",
-        "status": "draft"
-    }
-    generated_q2 = {
-        "id": f"q-{uuid.uuid4().hex[:6]}",
-        "concept_id": concept_id,
-        "concept_name": req.title,
-        "subject": req.subject,
-        "text": f"How does {req.title} handle boundary constraints or edge cases during execution?",
-        "options": [
-            "By gracefully decaying stale parameters and prioritizing fresh updates",
-            "By failing catastrophically without throwing an exception",
-            "By bypassing validation checks to minimize latency at all costs",
-            "By doubling memory consumption exponentially on each iteration"
-        ],
-        "answer_index": 0,
-        "explanation": "Graceful parameter decay and prioritizing validated inputs is the standard architectural design pattern documented in this module.",
-        "status": "draft"
-    }
-    
-    db_questions.insert(0, generated_q1)
-    db_questions.insert(1, generated_q2)
-    
+    created_questions = []
+    created_concepts = [primary_concept]
+
+    for item in extracted:
+        c_name = item.get("name", req.title)
+        if c_name.strip() and c_name.lower() != req.title.lower():
+            sub_id = f"c-{uuid.uuid4().hex[:6]}"
+            sub_c = {
+                "id": sub_id,
+                "subject": req.subject,
+                "topic": req.topic,
+                "name": c_name,
+                "difficulty": "Medium",
+                "n_right": 0,
+                "n_wrong": 0,
+                "last_practiced_at": datetime.now(timezone.utc).isoformat(),
+                "half_life_days": 1.0,
+                "p_hat": 0.95,
+                "next_review_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                "is_due": False,
+                "delta_days": 0.0
+            }
+            db_concepts[sub_id] = sub_c
+            created_concepts.append(sub_c)
+            target_id = sub_id
+        else:
+            target_id = primary_concept_id
+
+        for q in item.get("questions", []):
+            q_id = f"q-{uuid.uuid4().hex[:6]}"
+            new_q = {
+                "id": q_id,
+                "concept_id": target_id,
+                "concept_name": c_name,
+                "subject": req.subject,
+                "text": q.get("text", f"Key assessment on {c_name}?"),
+                "options": q.get("options", ["Correct option", "Distractor 1", "Distractor 2", "Distractor 3"]),
+                "answer_index": q.get("answer_index", 0),
+                "explanation": q.get("explanation", f"Based on notes for {c_name}."),
+                "status": "approved",
+                "source": item.get("source", "gemini")
+            }
+            db_questions.insert(0, new_q)
+            created_questions.append(new_q)
+
+    # Fallback if no questions were parsed
+    if not created_questions:
+        fallback_q = {
+            "id": f"q-{uuid.uuid4().hex[:6]}",
+            "concept_id": primary_concept_id,
+            "concept_name": req.title,
+            "subject": req.subject,
+            "text": f"What is the primary cognitive objective of '{req.title}'?",
+            "options": [
+                f"Establishing foundational principles for {req.title}",
+                "Introducing arbitrary constraints without verification",
+                "Deprecating previous knowledge without retention tracking",
+                "Static manual reconciliation"
+            ],
+            "answer_index": 0,
+            "explanation": f"Understanding {req.title} provides foundational mastery of {req.topic}.",
+            "status": "approved"
+        }
+        db_questions.insert(0, fallback_q)
+        created_questions.append(fallback_q)
+
     return {
         "success": True,
-        "concept": new_concept,
-        "generated_questions": [generated_q1, generated_q2]
+        "concept": primary_concept,
+        "created_concepts": created_concepts,
+        "generated_questions": created_questions
     }
 
 @app.get("/api/plan/today")

@@ -20,5 +20,20 @@ class Settings(BaseModel):
     RETENTION_THRESHOLD: float = 0.7  # Default probability threshold for review
     DEFAULT_DAILY_MINUTES: int = 60
 
+    def get_gemini_api_key(self) -> str:
+        # Dynamically re-check .env in case user saved it after startup
+        try:
+            from dotenv import load_dotenv
+            cur = Path(__file__).resolve()
+            backend_env = cur.parent.parent.parent / ".env"
+            root_env = cur.parent.parent.parent.parent / ".env"
+            if backend_env.exists():
+                load_dotenv(dotenv_path=backend_env, override=True)
+            if root_env.exists():
+                load_dotenv(dotenv_path=root_env, override=True)
+        except Exception:
+            pass
+        return os.getenv("GEMINI_API_KEY", "").strip() or self.GEMINI_API_KEY.strip()
+
 
 settings = Settings()
