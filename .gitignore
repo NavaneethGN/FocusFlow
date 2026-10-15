@@ -41,6 +41,9 @@ desktop.ini
 __pycache__/
 *.py[cod]
 *$py.class
+*.db
+*.sqlite
+*.sqlite3
 
 # C extensions
 *.so

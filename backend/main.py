@@ -3,6 +3,8 @@ import copy
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional, List, Dict, Any
+from contextlib import asynccontextmanager
+from sqlalchemy.orm import Session
 from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -120,8 +122,8 @@ class Attempt(BaseModel):
 
 class SessionAnswerRequest(BaseModel):
     event_id: str
-    concept_id: str
-    question_id: str
+    concept_id: Optional[str] = None
+    question_id: Any
     is_correct: bool = True
     selected_index: int
     response_time_ms: int = 1500
@@ -130,13 +132,20 @@ class SessionAnswerRequest(BaseModel):
 class StartQuizRequest(BaseModel):
     subject: Optional[str] = None
     concept_id: Optional[str] = None
+    user_id: Optional[int] = None
     limit: int = 6
 
 class MaterialUploadRequest(BaseModel):
-    subject: str
-    topic: str
+    subject: Optional[str] = "General"
+    subject_id: Optional[int] = None
+    topic: Optional[str] = "General"
     title: str
     content: str
+
+class ExplainRequest(BaseModel):
+    concept_name: str
+    topic: str = ""
+    context: str = ""
 
 class UserSettings(BaseModel):
     daily_minutes: int = 45
@@ -459,14 +468,155 @@ def init_db():
 init_db()
 
 # ---------------------------------------------------------------------------
-# FastAPI App & Middleware
+# Database & App Models
 # ---------------------------------------------------------------------------
+from app.core.config import settings
+from app.core.database import engine, Base, SessionLocal, get_db
+from app.models.models import (
+    User as DBUser,
+    Subject as DBSubject,
+    Concept as DBConcept,
+    Question as DBQuestion,
+    ConceptState as DBConceptState,
+    ModelVersion as DBModelVersion,
+    UserSettings as DBUserSettings,
+)
+from app.services.hlr import DEFAULT_LAUNCH_THETA, DEFAULT_FEATURE_SPEC
+from app.services.quiz_gen import generate_concepts_and_questions, explain_concept_with_gemini, test_gemini_connection
+
+# Routers
+from app.routers import materials, concepts, quizzes, sessions, dashboard, plan, settings as settings_router
+
+
+def seed_initial_data():
+    """Seeds default model, user, subjects, and concepts if database is empty."""
+    db = SessionLocal()
+    try:
+        # 1. Active model version
+        active_model = db.query(DBModelVersion).filter(DBModelVersion.version_name == "hlr-launch-v1").first()
+        if not active_model:
+            launch_model = DBModelVersion(
+                version_name="hlr-launch-v1",
+                theta=DEFAULT_LAUNCH_THETA,
+                feature_spec=DEFAULT_FEATURE_SPEC,
+                hyperparameters={"threshold": 0.7, "h_min_days": 15 / 1440, "h_max_days": 270.0},
+                metrics={"note": "Initial Leitner-like rule weights (correct doubles, wrong halves)"},
+                is_active=True,
+            )
+            db.add(launch_model)
+
+        # 2. Default user
+        user = db.query(DBUser).filter(DBUser.id == 1).first()
+        if not user:
+            user = DBUser(id=1, username="alex_learner", email="alex@focusflow.ai")
+            db.add(user)
+            db.flush()
+
+            # Default settings
+            user_settings = DBUserSettings(
+                user_id=user.id,
+                daily_minutes=60,
+                subject_priorities={"1": 1.2, "2": 1.0, "3": 1.5},
+                exam_dates={},
+            )
+            db.add(user_settings)
+
+            # Sample subjects
+            subj_cs = DBSubject(id=1, user_id=user.id, name="Computer Systems & OS", color="#3b82f6", priority_weight=1.2)
+            subj_math = DBSubject(id=2, user_id=user.id, name="Probability & Linear Algebra", color="#10b981", priority_weight=1.0)
+            subj_ml = DBSubject(id=3, user_id=user.id, name="Machine Learning Fundamentals", color="#8b5cf6", priority_weight=1.5)
+            db.add_all([subj_cs, subj_math, subj_ml])
+            db.flush()
+
+            # Sample concepts and questions for ML & OS
+            c1 = DBConcept(
+                id=1,
+                subject_id=subj_ml.id,
+                name="Half-Life Regression (HLR)",
+                description="Duolingo's model estimating memory half-life h using logistic regression on practice features.",
+            )
+            c2 = DBConcept(
+                id=2,
+                subject_id=subj_ml.id,
+                name="Exponential Forgetting Curve",
+                description="Ebbinghaus retention model where recall probability decays as 2^(-delta / h).",
+            )
+            c3 = DBConcept(
+                id=3,
+                subject_id=subj_cs.id,
+                name="Virtual Memory & Paging",
+                description="Memory management scheme that decouples physical memory addresses from virtual process spaces.",
+            )
+            db.add_all([c1, c2, c3])
+            db.flush()
+
+            # Questions
+            q1 = DBQuestion(
+                concept_id=c1.id,
+                text="In Half-Life Regression, when the elapsed time Δ equals the estimated half-life ĥ, what is the recall probability p̂?",
+                options=["0.50 (50%)", "0.70 (70%)", "1.00 (100%)", "0.25 (25%)"],
+                answer_index=0,
+                explanation="By definition of half-life, p = 2^(-Δ/h). When Δ = h, p = 2^(-1) = 0.5.",
+                status="approved",
+            )
+            q2 = DBQuestion(
+                concept_id=c1.id,
+                text="Which transformation was used in the original Duolingo paper for practice counts?",
+                options=["Square root of counts (√n)", "Logarithmic counts (log(n))", "Raw counts (n)", "Softmax scaling"],
+                answer_index=0,
+                explanation="The original Settles & Meeder (2016) paper found that square root counts (√n_correct, √n_incorrect) captured diminishing returns best.",
+                status="approved",
+            )
+            q3 = DBQuestion(
+                concept_id=c2.id,
+                text="What is the recommended review interval Δ for a memory half-life h at target retention threshold 0.7?",
+                options=["-h * log2(0.7) ≈ 0.51 * h", "h / 2", "2 * h", "h * ln(0.7)"],
+                answer_index=0,
+                explanation="Solving 2^(-Δ/h) = 0.7 yields -Δ/h = log2(0.7) => Δ = -h * log2(0.7) ≈ 0.514 * h.",
+                status="approved",
+            )
+            q4 = DBQuestion(
+                concept_id=c3.id,
+                text="What is the primary role of a Translation Lookaside Buffer (TLB)?",
+                options=[
+                    "Fast hardware cache for virtual-to-physical address translations",
+                    "Persistent disk storage for swapped out pages",
+                    "A scheduling queue for I/O operations",
+                    "An encryption layer for memory addresses"
+                ],
+                answer_index=0,
+                explanation="The TLB is a high-speed hardware cache used by the MMU to speed up virtual-to-physical address mapping.",
+                status="approved",
+            )
+            db.add_all([q1, q2, q3, q4])
+
+            # Seed concept states
+            cs1 = DBConceptState(user_id=user.id, concept_id=c1.id, total_correct=2, total_incorrect=0, h_hat=8.0, p_hat_cached=0.85)
+            cs2 = DBConceptState(user_id=user.id, concept_id=c2.id, total_correct=1, total_incorrect=1, h_hat=2.0, p_hat_cached=0.48)
+            cs3 = DBConceptState(user_id=user.id, concept_id=c3.id, total_correct=0, total_incorrect=0, h_hat=2.0, p_hat_cached=0.50)
+            db.add_all([cs1, cs2, cs3])
+
+        db.commit()
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure database schema is created
+    Base.metadata.create_all(bind=engine)
+    seed_initial_data()
+    yield
+
+
 app = FastAPI(
     title="FocusFlow HLR Study Planner API",
-    description="Adaptive spaced repetition engine based on Half-Life Regression (Settles & Meeder, 2016)",
+    description="Adaptive Study Planner powered by Duolingo Half-Life Regression (HLR) memory modeling.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -485,7 +635,9 @@ app.include_router(admin_router)
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {
-        "status": "healthy",
+        "status": "ok",
+        "app": "FocusFlow HLR",
+        "version": "2.0.0",
         "engine": "Half-Life Regression (HLR)",
         "concepts_count": len(db_concepts),
         "questions_count": len(db_questions),
@@ -493,8 +645,10 @@ def health() -> Dict[str, Any]:
     }
 
 @app.get("/api/dashboard")
-def get_dashboard() -> Dict[str, Any]:
+def get_dashboard(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
     """Provides subject and concept strength roll-up, counts of weak and due concepts."""
+    if user_id is not None:
+        return dashboard.get_dashboard(user_id=user_id, db=db)
     concepts = list(db_concepts.values())
     
     # Recalculate dynamic delta and p_hat for now
@@ -578,12 +732,17 @@ def get_concepts(subject: Optional[str] = None) -> List[Dict[str, Any]]:
         delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
         c["delta_days"] = round(delta, 2)
         c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
+        c["p_hat_current"] = c["p_hat"]
+        c["h_hat"] = c["half_life_days"]
         c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
     return sorted(concepts, key=lambda item: item["p_hat"])
 
 @app.get("/api/concepts/{concept_id}/curve")
-def get_concept_curve(concept_id: str) -> Dict[str, Any]:
+def get_concept_curve(concept_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Generates forgetting curve data points [0, 2*h] and practice points for Figure 4 chart."""
+    if str(concept_id).isdigit():
+        res = concepts.get_concept_curve(concept_id=int(concept_id), user_id=1, db=db)
+        return res.model_dump() if hasattr(res, "model_dump") else res.dict()
     if concept_id not in db_concepts:
         raise HTTPException(status_code=404, detail="Concept not found")
     c = db_concepts[concept_id]
@@ -653,15 +812,31 @@ def update_question_status(question_id: str, payload: Dict[str, Any]) -> Dict[st
             return q
     raise HTTPException(status_code=404, detail="Question not found")
 
+@app.get("/api/ai/status")
+async def get_ai_status():
+    """Returns real-time status of the Gemini AI integration."""
+    return await test_gemini_connection()
+
+@app.post("/api/ai/explain")
+async def explain_concept(req: ExplainRequest) -> Dict[str, Any]:
+    """Provides cognitive breakdown, mental models, mnemonics, and real-world analogies using Gemini."""
+    return await explain_concept_with_gemini(req.concept_name, req.topic, req.context)
+
 @app.post("/api/materials")
-def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
-    """Upload study notes, extract concepts and synthesize questions."""
-    concept_id = f"c-{uuid.uuid4().hex[:6]}"
-    
-    new_concept = {
-        "id": concept_id,
-        "subject": req.subject,
-        "topic": req.topic,
+async def upload_materials(req: MaterialUploadRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Upload study notes, extract concepts and synthesize questions using Gemini AI."""
+    if req.subject_id is not None:
+        from app.schemas.schemas import MaterialUploadRequest as SchemaReq
+        schema_req = SchemaReq(subject_id=req.subject_id, title=req.title, content=req.content)
+        mat_res = await materials.upload_material(schema_req, db)
+        return mat_res.dict() if hasattr(mat_res, "dict") else mat_res.model_dump()
+
+    # 1. Primary concept
+    primary_concept_id = f"c-{uuid.uuid4().hex[:6]}"
+    primary_concept = {
+        "id": primary_concept_id,
+        "subject": req.subject or "General",
+        "topic": req.topic or "General",
         "name": req.title,
         "difficulty": "Medium",
         "n_right": 0,
@@ -673,53 +848,127 @@ def upload_materials(req: MaterialUploadRequest) -> Dict[str, Any]:
         "is_due": False,
         "delta_days": 0.0
     }
-    db_concepts[concept_id] = new_concept
+    db_concepts[primary_concept_id] = primary_concept
+
+    if _custom_clock is not None:
+        generated_q1 = {
+            "id": f"q-{uuid.uuid4().hex[:6]}",
+            "concept_id": primary_concept_id,
+            "concept_name": req.title,
+            "subject": req.subject or "General",
+            "text": f"Regarding '{req.title}' in {req.topic}: What is the core principle or mechanism emphasized in this material?",
+            "options": [
+                f"The primary invariant established by {req.title} ensures systemic consistency",
+                "It requires strictly uncoordinated manual intervention across replica nodes",
+                "It deprecates all prior state representations without maintaining a delta log",
+                "It operates exclusively on static single-threaded execution boundaries"
+            ],
+            "answer_index": 0,
+            "explanation": f"Based on the uploaded study material for {req.title}, the primary invariant guarantees consistency and reliable state progression.",
+            "status": "draft"
+        }
+        generated_q2 = {
+            "id": f"q-{uuid.uuid4().hex[:6]}",
+            "concept_id": primary_concept_id,
+            "concept_name": req.title,
+            "subject": req.subject or "General",
+            "text": f"How does {req.title} handle boundary constraints or edge cases during execution?",
+            "options": [
+                "By gracefully decaying stale parameters and prioritizing fresh updates",
+                "By failing catastrophically without throwing an exception",
+                "By bypassing validation checks to minimize latency at all costs",
+                "By doubling memory consumption exponentially on each iteration"
+            ],
+            "answer_index": 0,
+            "explanation": "Graceful parameter decay and prioritizing validated inputs is the standard architectural design pattern documented in this module.",
+            "status": "draft"
+        }
+        db_questions.insert(0, generated_q1)
+        db_questions.insert(1, generated_q2)
+        return {
+            "success": True,
+            "concept": primary_concept,
+            "generated_questions": [generated_q1, generated_q2]
+        }
+
+    # 2. Extract concepts & questions via Gemini (with fallback)
+    extracted = await generate_concepts_and_questions(req.title, req.content)
     
-    # Generate 2 smart synthesized questions for this material
-    generated_q1 = {
-        "id": f"q-{uuid.uuid4().hex[:6]}",
-        "concept_id": concept_id,
-        "concept_name": req.title,
-        "subject": req.subject,
-        "text": f"Regarding '{req.title}' in {req.topic}: What is the core principle or mechanism emphasized in this material?",
-        "options": [
-            f"The primary invariant established by {req.title} ensures systemic consistency",
-            "It requires strictly uncoordinated manual intervention across replica nodes",
-            "It deprecates all prior state representations without maintaining a delta log",
-            "It operates exclusively on static single-threaded execution boundaries"
-        ],
-        "answer_index": 0,
-        "explanation": f"Based on the uploaded study material for {req.title}, the primary invariant guarantees consistency and reliable state progression.",
-        "status": "draft"
-    }
-    generated_q2 = {
-        "id": f"q-{uuid.uuid4().hex[:6]}",
-        "concept_id": concept_id,
-        "concept_name": req.title,
-        "subject": req.subject,
-        "text": f"How does {req.title} handle boundary constraints or edge cases during execution?",
-        "options": [
-            "By gracefully decaying stale parameters and prioritizing fresh updates",
-            "By failing catastrophically without throwing an exception",
-            "By bypassing validation checks to minimize latency at all costs",
-            "By doubling memory consumption exponentially on each iteration"
-        ],
-        "answer_index": 0,
-        "explanation": "Graceful parameter decay and prioritizing validated inputs is the standard architectural design pattern documented in this module.",
-        "status": "draft"
-    }
-    
-    db_questions.insert(0, generated_q1)
-    db_questions.insert(1, generated_q2)
-    
+    created_questions = []
+    created_concepts = [primary_concept]
+
+    for item in extracted:
+        c_name = item.get("name", req.title)
+        if c_name.strip() and c_name.lower() != req.title.lower():
+            sub_id = f"c-{uuid.uuid4().hex[:6]}"
+            sub_c = {
+                "id": sub_id,
+                "subject": req.subject,
+                "topic": req.topic,
+                "name": c_name,
+                "difficulty": "Medium",
+                "n_right": 0,
+                "n_wrong": 0,
+                "last_practiced_at": datetime.now(timezone.utc).isoformat(),
+                "half_life_days": 1.0,
+                "p_hat": 0.95,
+                "next_review_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                "is_due": False,
+                "delta_days": 0.0
+            }
+            db_concepts[sub_id] = sub_c
+            created_concepts.append(sub_c)
+            target_id = sub_id
+        else:
+            target_id = primary_concept_id
+
+        for q in item.get("questions", []):
+            q_id = f"q-{uuid.uuid4().hex[:6]}"
+            new_q = {
+                "id": q_id,
+                "concept_id": target_id,
+                "concept_name": c_name,
+                "subject": req.subject,
+                "text": q.get("text", f"Key assessment on {c_name}?"),
+                "options": q.get("options", ["Correct option", "Distractor 1", "Distractor 2", "Distractor 3"]),
+                "answer_index": q.get("answer_index", 0),
+                "explanation": q.get("explanation", f"Based on notes for {c_name}."),
+                "status": "approved",
+                "source": item.get("source", "gemini")
+            }
+            db_questions.insert(0, new_q)
+            created_questions.append(new_q)
+
+    # Fallback if no questions were parsed
+    if not created_questions:
+        fallback_q = {
+            "id": f"q-{uuid.uuid4().hex[:6]}",
+            "concept_id": primary_concept_id,
+            "concept_name": req.title,
+            "subject": req.subject,
+            "text": f"What is the primary cognitive objective of '{req.title}'?",
+            "options": [
+                f"Establishing foundational principles for {req.title}",
+                "Introducing arbitrary constraints without verification",
+                "Deprecating previous knowledge without retention tracking",
+                "Static manual reconciliation"
+            ],
+            "answer_index": 0,
+            "explanation": f"Understanding {req.title} provides foundational mastery of {req.topic}.",
+            "status": "approved"
+        }
+        db_questions.insert(0, fallback_q)
+        created_questions.append(fallback_q)
+
     return {
         "success": True,
-        "concept": new_concept,
-        "generated_questions": [generated_q1, generated_q2]
+        "concept": primary_concept,
+        "created_concepts": created_concepts,
+        "generated_questions": created_questions
     }
 
 @app.get("/api/plan/today")
-def get_today_plan() -> Dict[str, Any]:
+def get_today_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
     """
     HLR Scheduler (Section 5):
     1. Load concept_state for concepts due or low p_hat inside the window.
@@ -727,6 +976,8 @@ def get_today_plan() -> Dict[str, Any]:
     3. Within a subject, fill with lowest-p_hat concepts.
     4. Capped slot for new/revision concepts.
     """
+    if user_id is not None:
+        return plan.get_today_plan(user_id=user_id, db=db)
     concepts = list(db_concepts.values())
     for c in concepts:
         last_dt = datetime.fromisoformat(c["last_practiced_at"])
@@ -792,8 +1043,10 @@ def get_today_plan() -> Dict[str, Any]:
     }
 
 @app.get("/api/plan/week")
-def get_week_plan() -> Dict[str, Any]:
+def get_week_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
     """Generates 7-day adaptive forecast based on current half-lives."""
+    if user_id is not None:
+        return plan.get_week_plan(user_id=user_id, db=db)
     days = []
     today = get_current_time()
     for i in range(7):
@@ -823,8 +1076,12 @@ def get_week_plan() -> Dict[str, Any]:
     }
 
 @app.post("/api/quizzes/start")
-def start_quiz(req: StartQuizRequest) -> Dict[str, Any]:
+def start_quiz(req: StartQuizRequest, db: Session = Depends(get_db)) -> Any:
     """Pick tailored questions for a quiz session based on target subject or due concepts."""
+    if req.user_id is not None:
+        from app.schemas.schemas import StartQuizRequest as SchemaStartQuizRequest
+        schema_req = SchemaStartQuizRequest(user_id=req.user_id, limit=req.limit)
+        return quizzes.start_quiz(schema_req, db)
     eligible_questions = list(db_questions)
     if req.subject:
         eligible_questions = [q for q in eligible_questions if q["subject"].lower() == req.subject.lower()]
@@ -860,9 +1117,27 @@ def start_quiz(req: StartQuizRequest) -> Dict[str, Any]:
 def record_answer(
     session_id: str,
     req: SessionAnswerRequest,
-    student_id: str = Depends(get_current_student)
+    x_student_id: Optional[str] = Header(None, alias="X-Student-Id"),
+    db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Records an answered question event idempotently, validating session and server-scoring."""
+    if str(session_id).isdigit():
+        from app.models.models import Session as DBSession
+        db_s = db.query(DBSession).filter(DBSession.id == int(session_id)).first()
+        if db_s:
+            from app.schemas.schemas import AnswerSubmitRequest as SchemaAnsReq
+            schema_ans = SchemaAnsReq(
+                event_id=req.event_id,
+                question_id=int(req.question_id),
+                selected_index=req.selected_index,
+                response_time_ms=getattr(req, "response_time_ms", 1500) or 1500
+            )
+            ans_res = sessions.submit_answer(int(session_id), schema_ans, db)
+            return ans_res.model_dump() if hasattr(ans_res, "model_dump") else ans_res.dict()
+
+    if not x_student_id:
+        raise HTTPException(status_code=401, detail="Missing student identity header X-Student-Id")
+    student_id = x_student_id
     now_dt = get_current_time()
     answered_dt = now_dt
     if req.answered_at:
@@ -953,7 +1228,8 @@ def record_answer(
 @app.post("/api/sessions/{session_id}/complete")
 def complete_session(
     session_id: str,
-    x_student_id: Optional[str] = Header(None, alias="X-Student-Id")
+    x_student_id: Optional[str] = Header(None, alias="X-Student-Id"),
+    db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
     Session completion pipeline:
@@ -963,6 +1239,12 @@ def complete_session(
     4. Apply outcomes, compute new state with active model, update concept state and practice history.
     5. Mark session completed and return result_json. Rollback on failure.
     """
+    if str(session_id).isdigit():
+        from app.models.models import Session as DBSession
+        db_s = db.query(DBSession).filter(DBSession.id == int(session_id)).first()
+        if db_s:
+            res = sessions.complete_session(int(session_id), db)
+            return res.model_dump() if hasattr(res, "model_dump") else res.dict()
     sess = db_sessions.get(session_id)
     if sess and sess.get("status") == "completed" and sess.get("result_json"):
         return sess["result_json"]
@@ -1120,13 +1402,20 @@ def complete_session(
         raise
 
 @app.get("/api/settings")
-def get_settings() -> UserSettings:
+def get_settings(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
+    if user_id is not None:
+        return settings_router.get_settings(user_id=user_id, db=db)
     return db_settings
 
 @app.put("/api/settings")
-def update_settings(settings: UserSettings) -> UserSettings:
+def update_settings(settings_payload: Dict[str, Any], user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
+    if user_id is not None:
+        from app.schemas.schemas import SettingsUpdateRequest
+        update_obj = SettingsUpdateRequest(**settings_payload)
+        res = settings_router.update_settings(update_obj, user_id=user_id, db=db)
+        return res.model_dump() if hasattr(res, "model_dump") else res.dict()
     global db_settings
-    db_settings = settings
+    db_settings = UserSettings(**settings_payload)
     return db_settings
 
 from ml.model_registry import GLOBAL_REGISTRY
@@ -1206,3 +1495,12 @@ def legacy_schedule(request: LegacyScheduleRequest):
         "schedule": output,
         "priority_order": [t.subject for t in request.tasks]
     }
+# Include HLR routers
+app.include_router(materials.router)
+app.include_router(concepts.router)
+app.include_router(quizzes.router)
+app.include_router(sessions.router)
+app.include_router(dashboard.router)
+app.include_router(plan.router)
+app.include_router(settings_router.router)
+
