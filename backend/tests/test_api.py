@@ -327,7 +327,7 @@ def test_plan_schedule_free_time_windows_slicing(client):
     for tile in data["tiles"]:
         assert tile["duration_minutes"] == 30
         assert tile["recommended_topic"].startswith("Recommended Topic: ")
-        assert "🧠 Cognitive Peak" in tile["productivity_tier"]
+        assert "Cognitive Peak" in tile["productivity_tier"]
 
 
 def test_plan_schedule_ai_session_length_optimization(client):
@@ -366,7 +366,7 @@ def test_plan_schedule_manual_mode(client):
                 "end_time": "09:45 PM",
                 "subject": "Distributed Systems",
                 "target_topic": "Raft Leader Election",
-                "productivity_tier": "🌙 Night Review"
+                "productivity_tier": "Night Review"
             }
         ]
     }

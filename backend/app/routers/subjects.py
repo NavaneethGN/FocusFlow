@@ -138,12 +138,14 @@ def create_subject(req: SubjectCreate, user_id: int = 1, db: Session = Depends(g
 
     default_exam = req.exam_date or (datetime.now(timezone.utc) + timedelta(days=21)).strftime("%Y-%m-%d")
 
-    # 1. Update in-memory state in main.py
+    # 1. Update in-memory state in main.py and provision curriculum concepts
     try:
         main = _get_main()
         if main:
             main.db_settings.subject_priorities[cleaned_name] = req.priority_weight
             main.db_settings.exam_dates[cleaned_name] = default_exam
+            if hasattr(main, "ensure_subject_concepts"):
+                main.ensure_subject_concepts(cleaned_name, db=db)
     except Exception:
         pass
 

@@ -138,7 +138,7 @@ async def chat_with_gemini(
 
     if is_meta:
         meta_reply = (
-            "### 🧠 FocusFlow Subject Doubt Solver & AI Study Buddy\n\n"
+            "### FocusFlow Subject Doubt Solver & AI Study Buddy\n\n"
             "Here are my core capabilities to help you master any subject and achieve long-term memory retention:\n\n"
             "1. **Socratic Doubt Solving:** I deconstruct tricky doubts into foundational mental models, guiding you through thoughtful active recall questions rather than passive spoon-feeding.\n"
             "2. **Grounded Source Analysis:** Upload course notes, lecture slides, or textbook excerpts (`PDF`, `DOCX`, `PPTX`, `TXT`) in the left panel. I directly reference your specific materials to answer doubts.\n"
