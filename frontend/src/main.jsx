@@ -44,27 +44,16 @@ const API_BASE = 'http://localhost:8000/api';
 // ---------------------------------------------------------------------------
 // HLR Math Helper (Duolingo: Settles & Meeder, 2016)
 // ---------------------------------------------------------------------------
-const H_MIN = 15.0 / 1440.0;
-const H_MAX = 270.0;
-const P_MIN = 0.0001;
-const P_MAX = 0.9999;
-const LAUNCH_THETA = [0.0, 1.0, -1.0];
-
-function calcHalfLife(theta, x) {
-  const exponent = theta.reduce((acc, t, i) => acc + t * (x[i] || 0), 0);
-  const h = Math.pow(2, exponent);
-  return Math.min(Math.max(h, H_MIN), H_MAX);
-}
-
-function calcRecallProb(h, deltaDays) {
-  if (h <= 0) return P_MIN;
-  const p = Math.pow(2, -Math.max(0, deltaDays) / h);
-  return Math.min(Math.max(p, P_MIN), P_MAX);
-}
-
-function calcNextReviewDays(h, threshold = 0.70) {
-  return -h * Math.log2(threshold);
-}
+import {
+  H_MIN,
+  H_MAX,
+  P_MIN,
+  P_MAX,
+  LAUNCH_THETA,
+  calcHalfLife,
+  calcRecallProb,
+  calcNextReviewDays
+} from './hlr.js';
 
 // ---------------------------------------------------------------------------
 // Seed Data
@@ -791,7 +780,10 @@ export default function App() {
     if (isApiOnline) {
       fetch(`${API_BASE}/sessions/sess-${Date.now()}/answers`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Student-Id': 'std-default'
+        },
         body: JSON.stringify({
           event_id: `evt-${Date.now()}`,
           concept_id: currentQ.concept_id,
