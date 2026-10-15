@@ -3,10 +3,9 @@ import copy
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query, Depends
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
-from fastapi import FastAPI, HTTPException, Query, Header, Depends
+from fastapi import FastAPI, HTTPException, Query, Header, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -409,9 +408,41 @@ INITIAL_QUESTIONS = [
     },
 ]
 
+INITIAL_MATERIALS = [
+    {
+        "id": "mat-ai-1",
+        "subject": "Artificial Intelligence",
+        "topic": "Deep Learning",
+        "title": "Transformer Attention Mechanisms & Scaling",
+        "content": "Scaled dot-product attention computes Attention(Q, K, V) = softmax(QK^T / sqrt(d_k))V. Multi-head attention projects queries, keys, and values h times with learned linear projections to jointly attend to information at different subspaces. Scaling by 1/sqrt(d_k) prevents variance explosion that pushes softmax into regions with vanishing gradients."
+    },
+    {
+        "id": "mat-os-1",
+        "subject": "Operating Systems",
+        "topic": "Virtual Memory & Concurrency",
+        "title": "Virtual Memory Paging and Deadlock Conditions",
+        "content": "Clock (Second-Chance) page replacement uses a circular list and a reference bit. When a page fault occurs, if the pointed page has use bit = 1, it resets it to 0 and advances; if 0, it selects it for eviction. The four necessary Coffman deadlock conditions are: 1) Mutual Exclusion, 2) Hold and Wait, 3) No Preemption (resources cannot be forcibly confiscated), 4) Circular Wait. Breaking any single condition prevents deadlock."
+    },
+    {
+        "id": "mat-math-1",
+        "subject": "Mathematics",
+        "topic": "Linear Algebra & Probability",
+        "title": "Eigenvalues & Bayes Theorem",
+        "content": "Eigenvalues lambda satisfy Av = lambda v, where det(A - lambda I) = 0. Eigendecomposition factorizes A = Q Lambda Q^(-1). Bayes theorem states P(H|E) = [P(E|H) * P(H)] / P(E), updating prior belief P(H) with likelihood P(E|H) to find posterior probability P(H|E)."
+    },
+    {
+        "id": "mat-ds-1",
+        "subject": "Distributed Systems",
+        "topic": "Consensus & Tradeoffs",
+        "title": "Raft Consensus and PACELC Theorem",
+        "content": "Raft divides time into terms. A leader broadcasts heartbeats (AppendEntries). If a candidate or leader receives a higher term from an RPC, it reverts to follower state. PACELC theorem extends CAP: In a partitioned network, choose Availability or Consistency (A vs C); else (E), choose Latency or Consistency (L vs C)."
+    }
+]
+
 # Database state
 db_concepts: Dict[str, Dict[str, Any]] = {}
 db_questions: List[Dict[str, Any]] = [q.copy() for q in INITIAL_QUESTIONS]
+db_materials: List[Dict[str, Any]] = [m.copy() for m in INITIAL_MATERIALS]
 db_attempts: List[Dict[str, Any]] = []
 db_sessions: Dict[str, Dict[str, Any]] = {}
 db_settings = UserSettings()
@@ -421,11 +452,13 @@ db_training_records: List[Dict[str, Any]] = []
 db_practice_history: Dict[str, List[Dict[str, Any]]] = {}
 
 def init_db():
-    global NOW, db_concepts, db_questions, db_attempts, db_sessions, db_practice_history, db_settings, db_training_records
+    global NOW, db_concepts, db_questions, db_materials, db_attempts, db_sessions, db_practice_history, db_settings, db_training_records
     NOW = get_current_time()
     db_concepts.clear()
     db_questions.clear()
     db_questions.extend([q.copy() for q in INITIAL_QUESTIONS])
+    db_materials.clear()
+    db_materials.extend([m.copy() for m in INITIAL_MATERIALS])
     db_attempts.clear()
     db_sessions.clear()
     db_training_records.clear()
@@ -959,8 +992,121 @@ async def upload_materials(req: MaterialUploadRequest, db: Session = Depends(get
             "explanation": f"Understanding {req.title} provides foundational mastery of {req.topic}.",
             "status": "approved"
         }
-        db_questions.insert(0, fallback_q)
-        created_questions.append(fallback_q)
+    # Save to in-memory materials store
+    new_material_entry = {
+        "id": f"mat-{uuid.uuid4().hex[:6]}",
+        "subject": req.subject or "General",
+        "topic": req.topic or "General",
+        "title": req.title,
+        "content": req.content,
+        "created_at": get_current_time().isoformat(),
+    }
+    db_materials.insert(0, new_material_entry)
+
+    return {
+        "success": True,
+        "concept": primary_concept,
+        "created_concepts": created_concepts,
+        "generated_questions": created_questions
+    }
+
+@app.get("/api/materials")
+def get_all_materials(subject: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List ingested materials optionally filtered by subject."""
+    if not subject or subject.lower() == "all":
+        return db_materials
+    return [m for m in db_materials if m.get("subject", "").lower() == subject.lower()]
+
+@app.post("/api/materials/extract-file")
+async def extract_file_endpoint(file: UploadFile = File(...)):
+    """Extracts text from an uploaded PDF, Word DOCX, PowerPoint PPTX, markdown, or text file."""
+    import io
+    filename = file.filename or "uploaded_file"
+    content_bytes = await file.read()
+    lower_name = filename.lower()
+
+    if lower_name.endswith(".pdf"):
+        from pypdf import PdfReader
+        try:
+            reader = PdfReader(io.BytesIO(content_bytes))
+            text_parts = []
+            for i, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(f"[Page {i+1}]\n{page_text}")
+            extracted_text = "\n\n".join(text_parts).strip()
+            if not extracted_text:
+                extracted_text = f"PDF file '{filename}' was processed, but no selectable text layer was found."
+            return {
+                "filename": filename,
+                "text": extracted_text,
+                "page_count": len(reader.pages),
+                "size_bytes": len(content_bytes),
+                "file_type": "pdf"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse PDF file: {str(e)}")
+
+    elif lower_name.endswith(".docx"):
+        import docx
+        try:
+            doc = docx.Document(io.BytesIO(content_bytes))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    if row_text:
+                        paragraphs.append(row_text)
+            extracted_text = "\n\n".join(paragraphs).strip()
+            if not extracted_text:
+                extracted_text = f"Word document '{filename}' was processed, but contained no text paragraphs."
+            return {
+                "filename": filename,
+                "text": extracted_text,
+                "page_count": max(1, len(doc.paragraphs) // 10),
+                "size_bytes": len(content_bytes),
+                "file_type": "docx"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse DOCX file: {str(e)}")
+
+    elif lower_name.endswith((".pptx", ".ppt")):
+        try:
+            import pptx
+            prs = pptx.Presentation(io.BytesIO(content_bytes))
+            slide_texts = []
+            for i, slide in enumerate(prs.slides):
+                slide_content = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_content.append(shape.text.strip())
+                if slide_content:
+                    slide_texts.append(f"[Slide {i+1}]\n" + "\n".join(slide_content))
+            extracted_text = "\n\n".join(slide_texts).strip()
+            if not extracted_text:
+                extracted_text = f"PowerPoint presentation '{filename}' was processed, but no slide text was found."
+            return {
+                "filename": filename,
+                "text": extracted_text,
+                "page_count": len(prs.slides),
+                "size_bytes": len(content_bytes),
+                "file_type": "pptx"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse Presentation file: {str(e)}")
+
+    else:
+        try:
+            text = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content_bytes.decode("latin-1", errors="replace")
+        return {
+            "filename": filename,
+            "text": text.strip(),
+            "page_count": 1,
+            "size_bytes": len(content_bytes),
+            "file_type": "text"
+        }
 
 @app.get("/api/questions")
 def get_all_questions(
@@ -1011,86 +1157,403 @@ def update_question_status(question_id: str, payload: Dict[str, Any], db: Sessio
         "status": q.status,
         "text": q.text,
     }
-        "success": True,
-        "concept": primary_concept,
-        "created_concepts": created_concepts,
-        "generated_questions": created_questions
-    }
 
-@app.get("/api/plan/today")
-def get_today_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
-    """
-    HLR Scheduler (Section 5):
-    1. Load concept_state for concepts due or low p_hat inside the window.
-    2. Split daily minutes across subjects, weighted by due count and (1 - avg p_hat).
-    3. Within a subject, fill with lowest-p_hat concepts.
-    4. Capped slot for new/revision concepts.
-    """
-    if user_id is not None:
-        return plan.get_today_plan(user_id=user_id, db=db)
-    concepts = list(db_concepts.values())
-    for c in concepts:
+
+def parse_time_to_minutes(t_str: str) -> int:
+    t_clean = str(t_str).strip()
+    try:
+        if "AM" in t_clean.upper() or "PM" in t_clean.upper():
+            dt = datetime.strptime(t_clean.upper(), "%I:%M %p")
+            return dt.hour * 60 + dt.minute
+        parts = t_clean.split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except Exception:
+        return 450  # Default 07:30 AM
+
+
+def format_minutes_to_time(mins: int) -> str:
+    mins = int(mins) % 1440
+    h = mins // 60
+    m = mins % 60
+    period = "AM" if h < 12 else "PM"
+    h12 = h % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12:02d}:{m:02d} {period}"
+
+
+def determine_cognitive_tier(start_mins: int) -> str:
+    m = start_mins % 1440
+    if 360 <= m < 690:
+        return "🧠 Cognitive Peak"
+    elif 690 <= m < 840:
+        return "🌱 Steady Flow"
+    elif 840 <= m < 1050:
+        return "⚡ High Energy"
+    elif 1050 <= m < 1230:
+        return "🌅 Active Consolidation"
+    else:
+        return "🌙 Night Review"
+
+
+def build_adaptive_tile_schedule(
+    raw_concepts: List[Dict[str, Any]],
+    raw_questions: List[Dict[str, Any]],
+    settings: Any,
+    mode: str = "ai_optimized",
+    session_duration: int = 30,
+    session_length_mode: Optional[str] = None,
+    initial_session_duration: Optional[int] = None,
+    anchor_time: str = "07:30 AM",
+    free_time_windows: Optional[List[Dict[str, Any]]] = None,
+    custom_slots: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    # The selection between AI mode and manual mode is for session lengths:
+    # Manual mode: user directly selects session length.
+    # AI mode: AI fixes towards optimal session length for performance from the initial length using quiz data.
+    if session_length_mode is not None:
+        effective_session_mode = session_length_mode
+    elif initial_session_duration is not None:
+        effective_session_mode = "ai_optimized"
+    else:
+        effective_session_mode = mode if mode in ("ai_optimized", "manual") else "ai_optimized"
+
+    base_duration = initial_session_duration if initial_session_duration is not None else session_duration
+    if base_duration not in (20, 25, 30, 35, 45):
+        base_duration = 30
+
+    now = get_current_time()
+    for c in raw_concepts:
         last_dt = datetime.fromisoformat(c["last_practiced_at"])
-        delta = max(0.0, (get_current_time() - last_dt).total_seconds() / 86400.0)
+        delta = max(0.0, (now - last_dt).total_seconds() / 86400.0)
         c["delta_days"] = round(delta, 2)
         c["p_hat"] = round(recall_prob(c["half_life_days"], delta), 4)
-        c["is_due"] = c["p_hat"] <= db_settings.retention_threshold
+        c["is_due"] = c["p_hat"] <= getattr(settings, "retention_threshold", 0.70)
+        nw = c.get("n_wrong", 0)
+        nr = c.get("n_right", 0)
+        c["weakness_score"] = (1.0 - c["p_hat"]) * 2.0 + (nw / max(1, nw + nr)) * 1.5 + (1.0 if c["is_due"] else 0.0)
 
-    daily_mins = db_settings.daily_minutes
-    subjects = list(set(c["subject"] for c in concepts))
-    
-    # Calculate subject urgency = priority * (1.0 - avg_p + 0.3 * due_ratio)
-    subject_weights = {}
+    # Quiz performance analysis for AI session length optimization:
+    total_right = sum(c.get("n_right", 0) for c in raw_concepts)
+    total_wrong = sum(c.get("n_wrong", 0) for c in raw_concepts)
+    total_attempts = total_right + total_wrong
+    avg_accuracy = (total_right / total_attempts) if total_attempts > 0 else 0.70
+    high_decay_count = sum(1 for c in raw_concepts if c.get("p_hat", 0.70) < 0.65 or c.get("is_due", False))
+
+    if effective_session_mode == "ai_optimized":
+        if avg_accuracy < 0.65 or high_decay_count >= 3:
+            optimal_duration = 20
+            reason = f"AI tuned session length to 20m (from initial {base_duration}m): Quiz data shows {high_decay_count} concepts with memory decay. Shorter sessions prevent cognitive fatigue and increase retention."
+        elif avg_accuracy > 0.85 and high_decay_count <= 1:
+            optimal_duration = 45 if base_duration >= 30 else 30
+            reason = f"AI fixed session length to {optimal_duration}m: High quiz mastery ({int(avg_accuracy*100)}% accuracy) supports deep focus flow blocks."
+        else:
+            optimal_duration = 30
+            reason = f"AI fixed session length to 30m: Balanced focus duration for active recall ({int(avg_accuracy*100)}% accuracy)."
+
+        session_duration = optimal_duration
+        ai_optimization = {
+            "mode": "ai_optimized",
+            "initial_duration": base_duration,
+            "optimal_duration": optimal_duration,
+            "avg_accuracy": round(avg_accuracy, 3),
+            "high_decay_count": high_decay_count,
+            "reason": reason,
+        }
+    else:
+        session_duration = base_duration
+        ai_optimization = {
+            "mode": "manual",
+            "initial_duration": base_duration,
+            "optimal_duration": base_duration,
+            "avg_accuracy": round(avg_accuracy, 3),
+            "high_decay_count": high_decay_count,
+            "reason": f"Manual mode: Session duration locked at {base_duration}m by user preference.",
+        }
+
+    if not free_time_windows:
+        free_time_windows = [
+            {"id": "win-1", "start": "07:30", "end": "09:00", "label": "Morning Focus"},
+            {"id": "win-2", "start": "20:00", "end": "21:30", "label": "Evening Review"},
+        ]
+
+    # Automated session slicing across availability windows
+    sliced_slots = []
+    for w in free_time_windows:
+        try:
+            start_m = parse_time_to_minutes(w.get("start", "07:30"))
+            end_m = parse_time_to_minutes(w.get("end", "09:00"))
+            if end_m <= start_m:
+                end_m += 1440
+            total_avail = end_m - start_m
+            num_chunks = total_avail // session_duration
+            cur_s = start_m
+            for _ in range(num_chunks):
+                cur_e = cur_s + session_duration
+                s_fmt = format_minutes_to_time(cur_s)
+                e_fmt = format_minutes_to_time(cur_e)
+                s_clean = s_fmt.strip().lstrip("0").lower()
+                e_clean = e_fmt.strip().lstrip("0").lower()
+                sliced_slots.append({
+                    "start_mins": cur_s % 1440,
+                    "end_mins": cur_e % 1440,
+                    "start_time": s_fmt,
+                    "end_time": e_fmt,
+                    "time_slot": f"{s_fmt} - {e_fmt}",
+                    "time_slot_formatted": f"{s_clean} to {e_clean}",
+                    "duration_minutes": session_duration,
+                    "cognitive_tier": determine_cognitive_tier(cur_s % 1440),
+                    "window_label": w.get("label", "Availability Window"),
+                })
+                cur_s = cur_e
+        except Exception:
+            continue
+
+    if not sliced_slots:
+        anchor_m = parse_time_to_minutes(anchor_time or "07:30 AM")
+        cur_s = anchor_m
+        for i in range(3):
+            cur_e = cur_s + session_duration
+            s_fmt = format_minutes_to_time(cur_s)
+            e_fmt = format_minutes_to_time(cur_e)
+            s_clean = s_fmt.strip().lstrip("0").lower()
+            e_clean = e_fmt.strip().lstrip("0").lower()
+            sliced_slots.append({
+                "start_mins": cur_s % 1440,
+                "end_mins": cur_e % 1440,
+                "start_time": s_fmt,
+                "end_time": e_fmt,
+                "time_slot": f"{s_fmt} - {e_fmt}",
+                "time_slot_formatted": f"{s_clean} to {e_clean}",
+                "duration_minutes": session_duration,
+                "cognitive_tier": determine_cognitive_tier(cur_s % 1440),
+                "window_label": "AI-Optimized Slot",
+            })
+            cur_s = cur_e + 10
+
+    subject_priorities = getattr(settings, "subject_priorities", {})
+    subjects = list(set(c["subject"] for c in raw_concepts))
+    diff_weights = {"Hard": 3.5, "Medium": 2.0, "Easy": 1.0}
+    subject_difficulties = {}
     for subj in subjects:
-        subj_concepts = [c for c in concepts if c["subject"] == subj]
-        avg_p = sum(c["p_hat"] for c in subj_concepts) / len(subj_concepts) if subj_concepts else 0.8
-        due_ratio = sum(1 for c in subj_concepts if c["is_due"]) / len(subj_concepts) if subj_concepts else 0.0
-        priority_multiplier = db_settings.subject_priorities.get(subj, 1.0)
-        urgency = priority_multiplier * ((1.0 - avg_p) * 2.0 + due_ratio + 0.2)
-        subject_weights[subj] = max(0.1, urgency)
+        sc = [c for c in raw_concepts if c["subject"] == subj]
+        avg_w = sum(c["weakness_score"] for c in sc) / max(1, len(sc))
+        avg_diff = sum(diff_weights.get(c.get("difficulty", "Medium"), 2.0) for c in sc) / max(1, len(sc))
+        hard_count = sum(1 for c in sc if c.get("difficulty") == "Hard")
+        prio = subject_priorities.get(subj, 1.0)
+        # Combined difficulty score: concept hardness + retention weakness + priority
+        subject_difficulties[subj] = (avg_diff * 2.0) + (avg_w * 1.5) + (hard_count * 1.5) + prio
 
-    total_weight = sum(subject_weights.values()) or 1.0
-    
+    # Rank subjects from most to least difficult so top time slots receive the hardest subjects
+    ranked_subjects = sorted(subjects, key=lambda s: subject_difficulties.get(s, 1.0), reverse=True)
+    diff_val = lambda d: {"Hard": 3.5, "Medium": 2.0, "Easy": 1.0}.get(d, 2.0)
+    ranked_concepts = sorted(
+        raw_concepts,
+        key=lambda c: (diff_val(c.get("difficulty", "Medium")) * 2.0 + c["weakness_score"]),
+        reverse=True
+    )
+
+    tiles = []
+    used_concept_ids = set()
+
+    if mode == "manual" and custom_slots:
+        for idx, cs in enumerate(custom_slots):
+            c_name = cs.get("target_topic")
+            subj = cs.get("subject", ranked_subjects[0] if ranked_subjects else "General")
+            matched_c = next((c for c in raw_concepts if c["name"] == c_name or c["id"] == cs.get("target_concept_id")), None)
+            if not matched_c:
+                matched_c = next((c for c in raw_concepts if c["subject"] == subj), raw_concepts[0])
+
+            s_time = cs.get("start_time", format_minutes_to_time(450 + idx * session_duration))
+            e_time = cs.get("end_time", format_minutes_to_time(450 + (idx + 1) * session_duration))
+            s_clean = s_time.strip().lstrip("0").lower()
+            e_clean = e_time.strip().lstrip("0").lower()
+
+            tiles.append({
+                "id": f"tile-manual-{idx + 1}",
+                "time_slot": f"{s_time} - {e_time}",
+                "time_slot_formatted": f"{s_clean} to {e_clean}",
+                "start_time": s_time,
+                "end_time": e_time,
+                "duration_minutes": session_duration,
+                "subject": subj,
+                "target_topic": matched_c["name"],
+                "target_weak_topic": matched_c["name"],
+                "recommended_topic": f"Recommended Topic: {matched_c['name']}",
+                "target_concept_id": matched_c["id"],
+                "target_concept": matched_c,
+                "productivity_tier": cs.get("productivity_tier", "🛠️ Manual Selection"),
+                "cognitive_tier": cs.get("cognitive_tier", cs.get("productivity_tier", "🛠️ Manual Selection")),
+                "mode_tier": "Manual",
+                "urgency_reason": f"Manual allocation for {subj}. HLR recall: {int(matched_c['p_hat'] * 100)}%",
+                "decay_p": round(matched_c["p_hat"], 3),
+                "estimated_questions": 5,
+                "status": "ready",
+                "is_completed": cs.get("is_completed", False),
+            })
+    else:
+        for idx, slot in enumerate(sliced_slots):
+            assigned_subj = ranked_subjects[idx % len(ranked_subjects)]
+            subj_weak = [c for c in ranked_concepts if c["subject"] == assigned_subj and c["id"] not in used_concept_ids]
+            if not subj_weak:
+                subj_weak = [c for c in ranked_concepts if c["subject"] == assigned_subj] or [ranked_concepts[0]]
+
+            chosen_concept = subj_weak[0]
+            used_concept_ids.add(chosen_concept["id"])
+
+            p_pct = int(chosen_concept["p_hat"] * 100)
+            urgency_txt = (
+                f"Critical memory decay ({p_pct}% recall, h={chosen_concept['half_life_days']}d)"
+                if chosen_concept["p_hat"] < 0.50 else
+                f"Due for active recall review ({p_pct}% retention threshold)"
+                if chosen_concept["is_due"] else
+                f"Sustained mastery maintenance ({p_pct}% recall)"
+            )
+
+            tiles.append({
+                "id": f"tile-{idx + 1}",
+                "time_slot": slot["time_slot"],
+                "time_slot_formatted": slot.get("time_slot_formatted"),
+                "start_time": slot["start_time"],
+                "end_time": slot["end_time"],
+                "duration_minutes": slot["duration_minutes"],
+                "subject": assigned_subj,
+                "target_topic": chosen_concept["name"],
+                "target_weak_topic": chosen_concept["name"],
+                "recommended_topic": f"Recommended Topic: {chosen_concept['name']}",
+                "target_concept_id": chosen_concept["id"],
+                "target_concept": chosen_concept,
+                "productivity_tier": slot["cognitive_tier"],
+                "cognitive_tier": slot["cognitive_tier"],
+                "mode_tier": "AI-Optimized" if effective_session_mode == "ai_optimized" else "Manual",
+                "urgency_reason": urgency_txt,
+                "decay_p": round(chosen_concept["p_hat"], 3),
+                "estimated_questions": 5,
+                "status": "ready",
+                "is_completed": False,
+            })
+
     blocks = []
-    total_allocated_minutes = 0
-    
-    for subj in subjects:
-        subj_concepts = [c for c in concepts if c["subject"] == subj]
-        # Rank by lowest p_hat first (hardest/most forgotten concepts first)
-        ranked = sorted(subj_concepts, key=lambda item: item["p_hat"])
-        
-        weight = subject_weights[subj]
-        allocated_mins = max(10, round((weight / total_weight) * daily_mins / 5.0) * 5)
-        total_allocated_minutes += allocated_mins
-        
-        # Pick concepts fitting in this block (~5-7 mins per concept)
-        num_concepts_to_review = max(1, min(len(ranked), allocated_mins // 7))
-        target_concepts = ranked[:num_concepts_to_review]
-        
-        # Questions count for quiz
-        q_count = len([q for q in db_questions if any(q["concept_id"] == tc["id"] for tc in target_concepts)])
-        
-        blocks.append({
-            "id": f"block-{subj.lower().replace(' ', '-')}",
-            "subject": subj,
-            "allocated_minutes": allocated_mins,
-            "estimated_questions": max(3, min(10, q_count or 4)),
-            "avg_p_hat": round(sum(c["p_hat"] for c in target_concepts) / len(target_concepts), 3) if target_concepts else 0.8,
-            "concepts": target_concepts,
-            "status": "ready"
-        })
-
-    # Sort blocks by subject priority & lowest retention
-    blocks = sorted(blocks, key=lambda b: b["avg_p_hat"])
+    total_scheduled = sum(t["duration_minutes"] for t in tiles)
+    for subj in ranked_subjects:
+        subj_tiles = [t for t in tiles if t["subject"] == subj]
+        if subj_tiles:
+            target_concepts = [t["target_concept"] for t in subj_tiles]
+            blocks.append({
+                "id": f"block-{subj.lower().replace(' ', '-')}",
+                "subject": subj,
+                "allocated_minutes": sum(t["duration_minutes"] for t in subj_tiles),
+                "estimated_questions": len(subj_tiles) * 5,
+                "avg_p_hat": round(sum(t["decay_p"] for t in subj_tiles) / len(subj_tiles), 3),
+                "concepts": target_concepts,
+                "status": "ready",
+            })
 
     return {
-        "date": get_current_time().strftime("%Y-%m-%d"),
-        "daily_minutes_goal": daily_mins,
-        "total_scheduled_minutes": total_allocated_minutes,
-        "due_concepts_total": sum(1 for c in concepts if c["is_due"]),
+        "date": now.strftime("%Y-%m-%d"),
+        "mode": effective_session_mode,
+        "session_length_mode": effective_session_mode,
+        "initial_session_duration": base_duration,
+        "optimal_session_duration": session_duration,
+        "ai_duration_optimization": ai_optimization,
+        "session_duration": session_duration,
+        "anchor_time": anchor_time,
+        "free_time_windows": free_time_windows,
+        "daily_minutes_goal": getattr(settings, "daily_minutes", 60),
+        "total_scheduled_minutes": total_scheduled,
+        "due_concepts_total": sum(1 for c in raw_concepts if c["is_due"]),
+        "tiles": tiles,
+        "strips": tiles,
         "blocks": blocks,
-        "scheduler_algorithm": "HLR Weighted Memory Gradient Optimization"
+        "scheduler_algorithm": "HLR Free-Window Sliced Adaptive Cognitive Scheduler",
     }
+
+
+@app.get("/api/plan/today")
+def get_today_plan(
+    user_id: Optional[int] = None,
+    mode: str = "ai_optimized",
+    session_length_mode: Optional[str] = None,
+    initial_session_duration: Optional[int] = None,
+    session_duration: int = 30,
+    anchor_time: str = "07:30 AM",
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    HLR Free-Time Windows & Adaptive Strip Scheduler:
+    1. Slices flexible availability windows into uniform session durations.
+    2. Supports Session Length Optimization: Manual vs AI-Optimized (fixes optimal duration from quiz performance).
+    3. Routes urgent subjects and maps specific weak topics with exact timestamps.
+    """
+    if user_id is not None:
+        res = plan.get_today_plan(user_id=user_id, db=db)
+        if hasattr(res, "model_dump"):
+            res_dict = res.model_dump()
+        elif hasattr(res, "dict"):
+            res_dict = res.dict()
+        else:
+            res_dict = dict(res)
+        if "tiles" not in res_dict or not res_dict.get("tiles"):
+            # Provide tile/strip schedule overlay
+            sched = build_adaptive_tile_schedule(
+                raw_concepts=list(db_concepts.values()),
+                raw_questions=db_questions,
+                settings=db_settings,
+                mode=mode,
+                session_duration=session_duration,
+                session_length_mode=session_length_mode,
+                initial_session_duration=initial_session_duration,
+                anchor_time=anchor_time,
+            )
+            res_dict["tiles"] = sched["tiles"]
+            res_dict["strips"] = sched["strips"]
+            res_dict["mode"] = sched["mode"]
+            res_dict["session_length_mode"] = sched["session_length_mode"]
+            res_dict["session_duration"] = sched["session_duration"]
+            res_dict["initial_session_duration"] = sched["initial_session_duration"]
+            res_dict["optimal_session_duration"] = sched["optimal_session_duration"]
+            res_dict["ai_duration_optimization"] = sched["ai_duration_optimization"]
+            res_dict["anchor_time"] = anchor_time
+            res_dict["free_time_windows"] = sched["free_time_windows"]
+            res_dict["scheduler_algorithm"] = sched["scheduler_algorithm"]
+        return res_dict
+
+    return build_adaptive_tile_schedule(
+        raw_concepts=list(db_concepts.values()),
+        raw_questions=db_questions,
+        settings=db_settings,
+        mode=mode,
+        session_duration=session_duration,
+        session_length_mode=session_length_mode,
+        initial_session_duration=initial_session_duration,
+        anchor_time=anchor_time,
+    )
+
+
+@app.post("/api/plan/schedule")
+def generate_custom_schedule(req: Dict[str, Any], db: Session = Depends(get_db)) -> Any:
+    """Dynamic endpoint supporting customizable free-time windows and manual/AI session length modes."""
+    mode = req.get("mode", "ai_optimized")
+    session_length_mode = req.get("session_length_mode", mode)
+    initial_session_duration = req.get("initial_session_duration")
+    session_duration = int(req.get("session_duration", 30))
+    anchor_time = req.get("anchor_time", "07:30 AM")
+    free_time_windows = req.get("free_time_windows", [])
+    custom_slots = req.get("custom_slots", [])
+
+    return build_adaptive_tile_schedule(
+        raw_concepts=list(db_concepts.values()),
+        raw_questions=db_questions,
+        settings=db_settings,
+        mode=mode,
+        session_duration=session_duration,
+        session_length_mode=session_length_mode,
+        initial_session_duration=initial_session_duration,
+        anchor_time=anchor_time,
+        free_time_windows=free_time_windows,
+        custom_slots=custom_slots,
+    )
+
 
 @app.get("/api/plan/week")
 def get_week_plan(user_id: Optional[int] = None, db: Session = Depends(get_db)) -> Any:
@@ -1554,8 +2017,6 @@ def legacy_schedule(request: LegacyScheduleRequest):
         "completion_percent": 100,
         "schedule": output,
         "priority_order": [t.subject for t in request.tasks],
-    }
-        "priority_order": [t.subject for t in request.tasks]
     }
 # Include HLR routers
 app.include_router(materials.router)

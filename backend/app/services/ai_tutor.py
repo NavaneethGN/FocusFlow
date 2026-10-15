@@ -14,25 +14,24 @@ async def chat_with_gemini(
     subject: Optional[str] = None,
     persona: str = "socratic",
     concept_context: Optional[str] = None,
+    materials_context: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Interactive multi-turn conversation with Socratic/Exam persona using Gemini."""
+    """Interactive multi-turn conversation and doubt clearing with Socratic/Exam persona using Gemini."""
     key = settings.get_gemini_api_key()
 
     persona_prompts = {
         "socratic": (
-            "You are FocusFlow's Socratic Study Buddy. Your philosophy is active recall: "
-            "guide the student by asking thoughtful questions, offering intuitive analogies, "
-            "and nudging them toward discovering the solution themselves. Be concise, warm, "
-            "and encouraging. Keep responses under 180 words."
+            "You are FocusFlow's Socratic Study Buddy and Doubt Solver. Your mission is to resolve student doubts "
+            "by explaining the core intuition, referring directly to their uploaded study materials, and guiding them with "
+            "thoughtful questions. Be concise, warm, and encourage active recall. Keep responses under 220 words."
         ),
         "exam_prep": (
-            "You are FocusFlow's High-Yield Exam Coach. Provide crisp, structured bullet points, "
-            "essential formulas, edge cases, and highlight exactly how professors or interviewers test this. "
-            "Keep responses sharp and high-yield."
+            "You are FocusFlow's High-Yield Exam Coach and Doubt Solver. Clear doubts with crisp, structured bullet points, "
+            "essential invariants/formulas, edge cases, and highlight exactly how professors or interviewers test these concepts from the materials."
         ),
         "eli5": (
-            "You are FocusFlow's 'Explain Like I'm 5' Master. Deconstruct abstract technical concepts "
-            "into delightful, real-world metaphors with zero pretension and zero academic jargon."
+            "You are FocusFlow's 'Explain Like I'm 5' Master. Deconstruct the student's doubt using delightful, real-world metaphors "
+            "grounded in their study materials with zero academic pretension."
         ),
     }
 
@@ -40,6 +39,14 @@ async def chat_with_gemini(
     context_str = f" Subject: {subject}." if subject else ""
     if concept_context:
         context_str += f" Related Concept: {concept_context}."
+    if materials_context:
+        context_str += (
+            f"\n\n--- UPLOADED STUDY MATERIALS (SOURCE OF TRUTH) ---\n"
+            f"{materials_context[:4500]}\n"
+            f"--- END OF STUDY MATERIALS ---\n"
+            f"CRITICAL INSTRUCTION: Clear the student's doubts by directly referring to and explaining the contents "
+            f"of these uploaded materials. Quote or reference specific sections where relevant to ground your explanation."
+        )
 
     if key:
         # Build multi-turn contents
@@ -71,8 +78,8 @@ async def chat_with_gemini(
             payload = {
                 "contents": contents,
                 "generationConfig": {
-                    "temperature": 0.6 if persona == "socratic" else 0.3,
-                    "maxOutputTokens": 600,
+                    "temperature": 0.5 if persona == "socratic" else 0.2,
+                    "maxOutputTokens": 700,
                 },
             }
             try:
@@ -92,9 +99,9 @@ async def chat_with_gemini(
 
                         if not followups:
                             followups = [
-                                "Can you give an example of this in production?",
+                                f"How does this relate to the rest of {subject or 'my notes'}?",
                                 "What is the common mistake students make here?",
-                                "How does this relate to spaced repetition?",
+                                "Can you test my understanding with an active recall question?",
                             ]
 
                         return {
@@ -103,31 +110,57 @@ async def chat_with_gemini(
                             "ai_powered": True,
                             "model": model,
                             "suggested_followups": followups[:3],
+                            "cited_materials": [subject] if subject else ["General Study Notes"],
                         }
             except Exception as e:
                 print(f"Chat error with {model}: {e}")
 
     # Offline / missing key fallback
     subject_label = subject or "this topic"
-    fallback_replies = {
-        "socratic": (
-            f"That's a thoughtful question regarding **{subject_label}**! Let's examine it: "
-            f"If you consider how **{message.strip('?')}** impacts memory and state, "
-            f"what is the primary variable that changes? "
-            f"Consider what happens when elapsed time $\\Delta$ increases along the Ebbinghaus curve—"
-            f"does recall probability decay linearly or exponentially?"
-        ),
-        "exam_prep": (
-            f"### High-Yield Exam Summary: {subject_label}\n"
-            f"- **Core Concept:** When asked about *{message[:40]}...*, examiners want to see the underlying invariant.\n"
-            f"- **Formula/Mechanism:** $p = 2^{{-\\Delta / h}}$ where $h$ is half-life and $\\Delta$ is elapsed time.\n"
-            f"- **Exam Tip:** Watch out for boundary conditions (e.g. $\\Delta = 0 \\implies p = 1.0$; $\\Delta = h \\implies p = 0.5$)."
-        ),
-        "eli5": (
-            f"Imagine you have a mental bucket with water. Every day, half of the water evaporates unless you top it off! "
-            f"When you asked about **{message[:35]}...**, think of it like putting a tighter lid on the bucket so knowledge stays inside longer."
-        ),
-    }
+    if materials_context:
+        clean_excerpt = materials_context.replace("### Material:", "").strip()
+        first_lines = "\n".join(clean_excerpt.splitlines()[:4]).strip()
+        fallback_replies = {
+            "socratic": (
+                f"Regarding your doubt on **{subject_label}**, let's inspect what your uploaded materials specify:\n\n"
+                f"> *\"{first_lines[:240]}...\"*\n\n"
+                f"**Intuitive Resolution:** In **{subject_label}**, the primary mechanism ensures consistency by strictly enforcing invariant state boundaries. "
+                f"When you asked *'{message.strip('?')}'*, notice how the uploaded text handles this constraint. "
+                f"What do you predict would happen if this invariant were violated during execution?"
+            ),
+            "exam_prep": (
+                f"### High-Yield Doubt Resolution ({subject_label})\n"
+                f"- **From Your Uploaded Material:** *\"{first_lines[:180]}...\"*\n"
+                f"- **Key Takeaway:** For *{message[:35]}*, always state the core invariant and boundary conditions first.\n"
+                f"- **Common Trap:** Conflating temporary transient failure with persistent partition decay.\n"
+                f"- **HLR Anchor:** Retention decays exponentially as $p = 2^{{-\\Delta / h}}$, so immediate targeted review cements this principle."
+            ),
+            "eli5": (
+                f"Think of your uploaded notes on **{subject_label}** like a clear instruction manual! "
+                f"It points out: *\"{first_lines[:150]}...\"*\n\n"
+                f"In simple terms, it's just like having guardrails on a bridge so nothing falls over the edge no matter how busy traffic gets!"
+            ),
+        }
+    else:
+        fallback_replies = {
+            "socratic": (
+                f"That's a thoughtful question regarding **{subject_label}**! Let's examine it: "
+                f"If you consider how **{message.strip('?')}** impacts memory and state, "
+                f"what is the primary variable that changes? "
+                f"Consider what happens when elapsed time $\\Delta$ increases along the Ebbinghaus curve—"
+                f"does recall probability decay linearly or exponentially?"
+            ),
+            "exam_prep": (
+                f"### High-Yield Exam Summary: {subject_label}\n"
+                f"- **Core Concept:** When asked about *{message[:40]}...*, examiners want to see the underlying invariant.\n"
+                f"- **Formula/Mechanism:** $p = 2^{{-\\Delta / h}}$ where $h$ is half-life and $\\Delta$ is elapsed time.\n"
+                f"- **Exam Tip:** Watch out for boundary conditions (e.g. $\\Delta = 0 \\implies p = 1.0$; $\\Delta = h \\implies p = 0.5$)."
+            ),
+            "eli5": (
+                f"Imagine you have a mental bucket with water. Every day, half of the water evaporates unless you top it off! "
+                f"When you asked about **{message[:35]}...**, think of it like putting a tighter lid on the bucket so knowledge stays inside longer."
+            ),
+        }
 
     return {
         "reply": fallback_replies.get(persona, fallback_replies["socratic"]),
@@ -139,6 +172,7 @@ async def chat_with_gemini(
             "Can you explain the formula step-by-step?",
             "What is a real-world engineering example?",
         ],
+        "cited_materials": [subject] if subject else ["General Study Notes"],
     }
 
 

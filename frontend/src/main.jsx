@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Brain,
@@ -8,6 +8,11 @@ import {
   Clock,
   Compass,
   FileText,
+  File,
+  FileUp,
+  FileCheck,
+  Paperclip,
+  Trash2,
   Flame,
   Layers,
   LineChart,
@@ -20,8 +25,11 @@ import {
   Upload,
   AlertTriangle,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
   Check,
   X,
+  Plus,
   Flag,
   HelpCircle,
   Sliders,
@@ -233,6 +241,210 @@ function initClientConcepts() {
   });
 }
 
+function createDefaultConceptsMessage(subject, allConcepts = [], allMaterials = []) {
+  const subjConcepts = allConcepts.filter(c => subject === 'All' || c.subject.toLowerCase() === subject.toLowerCase());
+  const subjMaterials = allMaterials.filter(m => subject === 'All' || m.subject.toLowerCase() === subject.toLowerCase());
+
+  let bulletPoints = [];
+  if (subjConcepts.length > 0) {
+    bulletPoints = subjConcepts.slice(0, 5).map(c => {
+      const topicTag = c.topic ? ` (${c.topic})` : '';
+      return `• **${c.name}**${topicTag}: Key invariant with estimated recall ${(c.p_hat * 100).toFixed(0)}% and memory half-life of ${c.half_life_days}d.`;
+    });
+  } else if (subjMaterials.length > 0) {
+    bulletPoints = subjMaterials.slice(0, 4).map(m => `• **${m.title}**: ${m.content.slice(0, 140)}...`);
+  } else {
+    bulletPoints = [
+      `• **Foundational Principles**: Core theorems and systemic models.`,
+      `• **State Invariants**: Ensuring fault-tolerant execution boundaries.`,
+      `• **Active Recall Memory Curve**: Calibrated by the Settles & Meeder (2016) HLR engine.`
+    ];
+  }
+
+  const subjectTitle = subject === 'All' ? 'All Subjects' : subject;
+
+  return {
+    role: 'model',
+    content: `Hello! I am your **FocusFlow AI Study Tutor & Doubt Solver**, grounded directly in your **${subjectTitle}** study sources on the left sidebar.\n\n### Main Concepts of ${subjectTitle}:\n${bulletPoints.join('\n')}\n\nAsk me any doubt about these concepts or your uploaded documents, or add new PDFs/DOCX/PPTs in the left sidebar!`,
+    timestamp: 'Just now',
+    followups: subjConcepts.length >= 2 ? [
+      `Explain ${subjConcepts[0].name} in simple terms`,
+      `What are the common exam pitfalls in ${subjConcepts[1].name}?`,
+      `Quiz me on ${subjectTitle}`
+    ] : [
+      `Explain the core mechanism from my notes`,
+      `What are the most common exam traps in ${subjectTitle}?`,
+      `Quiz me on ${subjectTitle}`
+    ],
+    cited_materials: subjMaterials.map(m => m.title).slice(0, 3),
+    aiPowered: false
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Chatbot Rich Text Renderer: Bold headings, bullet lists, highlighted text
+// ---------------------------------------------------------------------------
+function formatInlineText(text) {
+  if (!text) return text;
+  const parts = [];
+  const regex = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('`') && token.endsWith('`')) {
+      parts.push(
+        <code
+          key={match.index}
+          style={{
+            background: 'rgba(50, 96, 78, 0.08)',
+            padding: '2px 5px',
+            borderRadius: 4,
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.9em',
+            fontWeight: 700,
+            color: 'var(--mint-dark)'
+          }}
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
+      parts.push(
+        <strong
+          key={match.index}
+          style={{
+            fontWeight: 850,
+            color: 'inherit'
+          }}
+        >
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      parts.push(<em key={match.index}>{token.slice(1, -1)}</em>);
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+  return parts.length > 0 ? parts : text;
+}
+
+function RenderFormattedChatMessage({ content }) {
+  if (!content) return null;
+  const lines = content.split('\n');
+
+  return (
+    <div className="chat-formatted-body">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={idx} style={{ height: 6 }} />;
+        }
+
+        // Headings: use bold for headings and prominent hierarchy
+        if (trimmed.startsWith('### ')) {
+          return (
+            <div
+              key={idx}
+              style={{
+                fontWeight: 850,
+                fontSize: '1.05rem',
+                marginTop: idx > 0 ? 10 : 2,
+                marginBottom: 4,
+                letterSpacing: '-0.01em'
+              }}
+            >
+              {formatInlineText(trimmed.replace(/^###\s+/, ''))}
+            </div>
+          );
+        }
+        if (trimmed.startsWith('## ')) {
+          return (
+            <div
+              key={idx}
+              style={{
+                fontWeight: 850,
+                fontSize: '1.15rem',
+                marginTop: idx > 0 ? 12 : 2,
+                marginBottom: 4,
+                letterSpacing: '-0.01em'
+              }}
+            >
+              {formatInlineText(trimmed.replace(/^##\s+/, ''))}
+            </div>
+          );
+        }
+        if (trimmed.startsWith('# ')) {
+          return (
+            <div
+              key={idx}
+              style={{
+                fontWeight: 850,
+                fontSize: '1.25rem',
+                marginTop: idx > 0 ? 14 : 2,
+                marginBottom: 6,
+                letterSpacing: '-0.02em'
+              }}
+            >
+              {formatInlineText(trimmed.replace(/^#\s+/, ''))}
+            </div>
+          );
+        }
+
+        // Blockquotes
+        if (trimmed.startsWith('> ')) {
+          return (
+            <blockquote
+              key={idx}
+              style={{
+                borderLeft: '3px solid var(--mint-dark)',
+                paddingLeft: 10,
+                margin: '4px 0',
+                color: 'var(--muted)',
+                fontStyle: 'italic'
+              }}
+            >
+              {formatInlineText(trimmed.replace(/^>\s+/, ''))}
+            </blockquote>
+          );
+        }
+
+        // Bullet lists
+        if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('• ')) {
+          return (
+            <div
+              key={idx}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 7,
+                margin: '2px 0 2px 8px'
+              }}
+            >
+              <span style={{ color: 'var(--mint-dark)', fontWeight: 800, fontSize: '0.9em', marginTop: 1 }}>•</span>
+              <div style={{ flex: 1 }}>{formatInlineText(trimmed.replace(/^[-*•]\s+/, ''))}</div>
+            </div>
+          );
+        }
+
+        // Standard paragraph line
+        return (
+          <div key={idx} style={{ margin: '2px 0' }}>
+            {formatInlineText(line)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main Application Component
 // ---------------------------------------------------------------------------
@@ -280,11 +492,42 @@ export default function App() {
     sessionResults: []
   });
 
+  const [uploadedMaterials, setUploadedMaterials] = useState([
+    {
+      id: "mat-ai-1",
+      subject: "Artificial Intelligence",
+      topic: "Deep Learning",
+      title: "Transformer Attention Mechanisms & Scaling",
+      content: "Scaled dot-product attention computes Attention(Q, K, V) = softmax(QK^T / sqrt(d_k))V. Multi-head attention projects queries, keys, and values h times with learned linear projections to jointly attend to information at different subspaces. Scaling by 1/sqrt(d_k) prevents variance explosion that pushes softmax into regions with vanishing gradients."
+    },
+    {
+      id: "mat-os-1",
+      subject: "Operating Systems",
+      topic: "Virtual Memory & Concurrency",
+      title: "Virtual Memory Paging and Deadlock Conditions",
+      content: "Clock (Second-Chance) page replacement uses a circular list and a reference bit. When a page fault occurs, if the pointed page has use bit = 1, it resets it to 0 and advances; if 0, it selects it for eviction. The four necessary Coffman deadlock conditions are: 1) Mutual Exclusion, 2) Hold and Wait, 3) No Preemption (resources cannot be forcibly confiscated), 4) Circular Wait. Breaking any single condition prevents deadlock."
+    },
+    {
+      id: "mat-math-1",
+      subject: "Mathematics",
+      topic: "Linear Algebra & Probability",
+      title: "Eigenvalues & Bayes Theorem",
+      content: "Eigenvalues lambda satisfy Av = lambda v, where det(A - lambda I) = 0. Eigendecomposition factorizes A = Q Lambda Q^(-1). Bayes theorem states P(H|E) = [P(E|H) * P(H)] / P(E), updating prior belief P(H) with likelihood P(E|H) to find posterior probability P(H|E)."
+    },
+    {
+      id: "mat-ds-1",
+      subject: "Distributed Systems",
+      topic: "Consensus & Tradeoffs",
+      title: "Raft Consensus and PACELC Theorem",
+      content: "Raft divides time into terms. A leader broadcasts heartbeats (AppendEntries). If a candidate or leader receives a higher term from an RPC, it reverts to follower state. PACELC theorem extends CAP: In a partitioned network, choose Availability or Consistency (A vs C); else (E), choose Latency or Consistency (L vs C)."
+    }
+  ]);
+
   const [materialForm, setMaterialForm] = useState({
-    subject: 'Artificial Intelligence',
-    topic: 'Deep Learning',
-    title: 'Self-Attention and Multi-Head Projections',
-    content: 'Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. It projects queries, keys, and values h times with learned linear projections.'
+    subject: 'Operating Systems',
+    topic: 'Virtual Memory',
+    title: 'Page Replacement & Deadlock Rules',
+    content: ''
   });
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -292,25 +535,123 @@ export default function App() {
 
   const [simulatedDelta, setSimulatedDelta] = useState(2.5);
 
+  // File Upload / Paste & Chatbot State
+  const fileInputRef = useRef(null);
+  const [stagedFiles, setStagedFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [showQuizConfirm, setShowQuizConfirm] = useState(false);
+  const [showMaterialsModal, setShowMaterialsModal] = useState(false);
+  const [extractingFile, setExtractingFile] = useState(false);
+
+  // NotebookLM Left Sidebar State
+  const sidebarFileInputRef = useRef(null);
+  const [sidebarUploadTitle, setSidebarUploadTitle] = useState('');
+  const [sidebarUploadContent, setSidebarUploadContent] = useState('');
+  const [sidebarStagedFiles, setSidebarStagedFiles] = useState([]);
+  const [sidebarExtracting, setSidebarExtracting] = useState(false);
+  const [sidebarUploading, setSidebarUploading] = useState(false);
+  const [sidebarUploadSuccess, setSidebarUploadSuccess] = useState(false);
+  const [sidebarDragging, setSidebarDragging] = useState(false);
+  const [selectedSourcePreview, setSelectedSourcePreview] = useState(null);
+
+  // ---------------------------------------------------------------------------
+  // Adaptive Study Schedule & Slicing State (Session Length Modes, Windows, Slicing)
+  // ---------------------------------------------------------------------------
+  const [sessionLengthMode, setSessionLengthMode] = useState('ai_optimized'); // 'ai_optimized' | 'manual'
+  const [initialSessionDuration, setInitialSessionDuration] = useState(30); // Baseline length: 20 | 30 | 45
+  const [sessionDuration, setSessionDuration] = useState(30); // Manual selection: 20 | 30 | 45
+  const [freeTimeWindows, setFreeTimeWindows] = useState([
+    { id: 'win-1', start: '07:00', end: '08:30', label: 'Morning Focus' },
+    { id: 'win-2', start: '20:00', end: '22:00', label: 'Evening Review' }
+  ]);
+  const [newWindowStart, setNewWindowStart] = useState('14:00');
+  const [newWindowEnd, setNewWindowEnd] = useState('15:30');
+  const [newWindowLabel, setNewWindowLabel] = useState('Afternoon Deep Work');
+  const [showAddWindow, setShowAddWindow] = useState(false);
+  const [completedTileIds, setCompletedTileIds] = useState(new Set());
+  const [customSlots, setCustomSlots] = useState([]);
+  const [isRecreatingSchedule, setIsRecreatingSchedule] = useState(false);
+  const [scheduleSuccessMsg, setScheduleSuccessMsg] = useState(false);
+  const [scheduleSeed, setScheduleSeed] = useState(0);
+
+  async function handleRecreateSchedule() {
+    setIsRecreatingSchedule(true);
+    setScheduleSuccessMsg(false);
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/plan/schedule`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: sessionLengthMode,
+            session_length_mode: sessionLengthMode,
+            initial_session_duration: initialSessionDuration,
+            session_duration: sessionDuration,
+            free_time_windows: freeTimeWindows,
+            custom_slots: []
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTodayPlan(data);
+        }
+      }
+    } catch (e) {
+      console.warn('Recreate schedule fallback', e);
+    } finally {
+      setCustomSlots([]);
+      setScheduleSeed(prev => prev + 1);
+      setTimeout(() => {
+        setIsRecreatingSchedule(false);
+        setScheduleSuccessMsg(true);
+        setTimeout(() => setScheduleSuccessMsg(false), 2500);
+      }, 350);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // AI Study Features State & Handlers
   // ---------------------------------------------------------------------------
-  const [chatMessages, setChatMessages] = useState([
-    {
-      role: 'model',
-      content: "Hello! I am your **FocusFlow Socratic Study Buddy**. I'm here to test your understanding, deconstruct challenging logic, and help you lock concepts into long-term memory. What would you like to master today?",
-      timestamp: 'Just now',
-      followups: [
-        "Quiz me on my weakest concept",
-        "Why does recall probability decay exponentially (2^-Δ/h)?",
-        "Explain Raft Leader Election in 3 simple steps"
-      ]
+  const [subjectsList, setSubjectsList] = useState([
+    'Operating Systems',
+    'Artificial Intelligence',
+    'Distributed Systems',
+    'Mathematics'
+  ]);
+  const [showAddSubjectInput, setShowAddSubjectInput] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState('');
+
+  function handleAddNewSubject() {
+    const trimmed = newSubjectName.trim();
+    if (!trimmed) return;
+    if (!subjectsList.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
+      setSubjectsList(prev => [...prev, trimmed]);
     }
+    setChatSubject(trimmed);
+    setNewSubjectName('');
+    setShowAddSubjectInput(false);
+  }
+
+  const [chatSubject, setChatSubject] = useState('Operating Systems');
+  const [chatMessages, setChatMessages] = useState(() => [
+    createDefaultConceptsMessage('Operating Systems', initClientConcepts(), [
+      {
+        id: "mat-os-1",
+        subject: "Operating Systems",
+        topic: "Virtual Memory & Concurrency",
+        title: "Virtual Memory Paging and Deadlock Conditions",
+        content: "Clock (Second-Chance) page replacement uses a circular list and a reference bit. When a page fault occurs, if the pointed page has use bit = 1, it resets it to 0 and advances; if 0, it selects it for eviction. The four necessary Coffman deadlock conditions are: 1) Mutual Exclusion, 2) Hold and Wait, 3) No Preemption, 4) Circular Wait."
+      }
+    ])
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatPersona, setChatPersona] = useState('socratic');
-  const [chatSubject, setChatSubject] = useState('All');
   const [chatLoading, setChatLoading] = useState(false);
+
+  // Whenever subject changes, update default welcome message displaying the main concepts
+  useEffect(() => {
+    setChatMessages([createDefaultConceptsMessage(chatSubject, concepts, uploadedMaterials)]);
+  }, [chatSubject]);
 
   const [doubtInput, setDoubtInput] = useState('');
   const [doubtSubject, setDoubtSubject] = useState('Operating Systems');
@@ -327,13 +668,305 @@ export default function App() {
   const [flippedCards, setFlippedCards] = useState({});
   const [copiedMnemonic, setCopiedMnemonic] = useState(false);
 
+  // Sidebar File Processing (PDF / Word DOCX / PPT / text)
+  async function handleSidebarProcessFile(file) {
+    if (!file) return;
+    const fileId = `sb-file-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+    const lowerName = file.name.toLowerCase();
+    let fileType = 'text';
+    if (lowerName.endsWith('.pdf')) fileType = 'pdf';
+    else if (lowerName.endsWith('.docx') || lowerName.endsWith('.doc')) fileType = 'docx';
+    else if (lowerName.endsWith('.pptx') || lowerName.endsWith('.ppt')) fileType = 'pptx';
+
+    const cleanTitle = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, ' ');
+    if (!sidebarUploadTitle.trim()) {
+      setSidebarUploadTitle(cleanTitle);
+    }
+
+    const newStaged = {
+      id: fileId,
+      name: file.name,
+      size: `${(file.size / 1024).toFixed(1)} KB`,
+      status: 'extracting',
+      text: '',
+      pageCount: 1,
+      fileType: fileType
+    };
+    setSidebarStagedFiles(prev => [...prev, newStaged]);
+    setSidebarExtracting(true);
+
+    try {
+      if (['pdf', 'docx', 'pptx'].includes(fileType)) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`${API_BASE}/materials/extract-file`, {
+          method: 'POST',
+          body: formData
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSidebarStagedFiles(prev => prev.map(f => f.id === fileId ? {
+            ...f,
+            status: 'ready',
+            text: data.text,
+            pageCount: data.page_count || 1,
+            fileType: data.file_type || fileType
+          } : f));
+          setSidebarExtracting(false);
+          return;
+        }
+      } else {
+        const text = await file.text();
+        setSidebarStagedFiles(prev => prev.map(f => f.id === fileId ? {
+          ...f,
+          status: 'ready',
+          text: text,
+          pageCount: 1,
+          fileType: 'text'
+        } : f));
+        setSidebarExtracting(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('Sidebar file extraction fallback', err);
+    }
+
+    // Fallback extraction
+    try {
+      const text = await file.text();
+      setSidebarStagedFiles(prev => prev.map(f => f.id === fileId ? {
+        ...f,
+        status: 'ready',
+        text: text.slice(0, 5000),
+        pageCount: 1,
+        fileType: fileType
+      } : f));
+    } catch {
+      setSidebarStagedFiles(prev => prev.map(f => f.id === fileId ? {
+        ...f,
+        status: 'ready',
+        text: `Content extracted from ${file.name}.`,
+        pageCount: 1,
+        fileType: fileType
+      } : f));
+    }
+    setSidebarExtracting(false);
+  }
+
+  async function handleSidebarUploadSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const targetSubject = chatSubject === 'All' ? 'General' : chatSubject;
+    const contentFromFiles = sidebarStagedFiles.map(f => f.text).filter(Boolean).join('\n\n');
+    const contentToIngest = (sidebarUploadContent.trim() + '\n\n' + contentFromFiles).trim();
+
+    // Derive a clean, fitting title directly from the uploaded file or source content
+    let titleToUse = '';
+    if (sidebarStagedFiles[0]?.name) {
+      titleToUse = sidebarStagedFiles[0].name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ').trim();
+    } else if (sidebarUploadContent.trim()) {
+      const firstLine = sidebarUploadContent.trim().split('\n')[0].replace(/^[#*\-•\s]+/, '').trim();
+      if (firstLine && firstLine.length > 2) {
+        titleToUse = firstLine.length > 40 ? firstLine.slice(0, 37) + '...' : firstLine;
+      }
+    }
+    if (!titleToUse) {
+      titleToUse = `${targetSubject} Notes (${new Date().toLocaleDateString([], { month: 'short', day: 'numeric' })})`;
+    }
+    const topicToUse = targetSubject;
+
+    setSidebarUploading(true);
+    setSidebarUploadSuccess(false);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/materials`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subject: targetSubject,
+            topic: topicToUse,
+            title: titleToUse,
+            content: contentToIngest
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.concept) {
+            setConcepts(prev => [data.concept, ...prev]);
+          }
+          if (data.generated_questions) {
+            setQuestions(prev => [...data.generated_questions, ...prev]);
+          }
+          const newMat = {
+            id: `mat-${Date.now()}`,
+            subject: targetSubject,
+            topic: topicToUse,
+            title: titleToUse,
+            content: contentToIngest
+          };
+          setUploadedMaterials(prev => [newMat, ...prev]);
+          setSidebarStagedFiles([]);
+          setSidebarUploadTitle('');
+          setSidebarUploadContent('');
+          setSidebarUploading(false);
+          setSidebarUploadSuccess(true);
+          setTimeout(() => setSidebarUploadSuccess(false), 3000);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Backend material upload failed', err);
+    }
+
+    // Client fallback
+    const newId = `c-usr-${Date.now()}`;
+    const newConcept = {
+      id: newId,
+      subject: targetSubject,
+      topic: topicToUse,
+      name: titleToUse,
+      difficulty: 'Medium',
+      n_right: 0,
+      n_wrong: 0,
+      days_ago: 0,
+      last_practiced_at: new Date().toISOString(),
+      half_life_days: 1.0,
+      p_hat: 0.99,
+      is_due: false,
+      delta_days: 0.0
+    };
+    setConcepts(prev => [newConcept, ...prev]);
+    setUploadedMaterials(prev => [{
+      id: `mat-${Date.now()}`,
+      subject: targetSubject,
+      topic: topicToUse,
+      title: titleToUse,
+      content: contentToIngest
+    }, ...prev]);
+    setSidebarStagedFiles([]);
+    setSidebarUploadTitle('');
+    setSidebarUploadContent('');
+    setSidebarUploading(false);
+    setSidebarUploadSuccess(true);
+    setTimeout(() => setSidebarUploadSuccess(false), 3000);
+  }
+
+  function handleDeleteMaterial(matId) {
+    setUploadedMaterials(prev => prev.filter(m => m.id !== matId));
+  }
+
+  // File processing (PDF / Word DOCX / PPT / text / paste)
+  async function handleProcessFile(file) {
+    if (!file) return;
+    const fileId = `file-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+    const lowerName = file.name.toLowerCase();
+    const isDoc = lowerName.match(/\.(pdf|docx|doc|pptx|ppt)$/);
+
+    const newStaged = {
+      id: fileId,
+      name: file.name,
+      size: `${(file.size / 1024).toFixed(1)} KB`,
+      status: 'extracting',
+      text: '',
+      pageCount: 1
+    };
+    setStagedFiles(prev => [...prev, newStaged]);
+    setExtractingFile(true);
+
+    try {
+      if (isDoc) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`${API_BASE}/materials/extract-file`, {
+          method: 'POST',
+          body: formData
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setStagedFiles(prev => prev.map(f => f.id === fileId ? {
+            ...f,
+            status: 'ready',
+            text: data.text,
+            pageCount: data.page_count || 1
+          } : f));
+          setExtractingFile(false);
+          return;
+        }
+      } else {
+        const text = await file.text();
+        setStagedFiles(prev => prev.map(f => f.id === fileId ? {
+          ...f,
+          status: 'ready',
+          text: text,
+          pageCount: 1
+        } : f));
+        setExtractingFile(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('File extraction error', err);
+    }
+
+    // Client fallback
+    try {
+      const text = await file.text();
+      setStagedFiles(prev => prev.map(f => f.id === fileId ? {
+        ...f,
+        status: 'ready',
+        text: text.slice(0, 5000),
+        pageCount: 1
+      } : f));
+    } catch {
+      setStagedFiles(prev => prev.map(f => f.id === fileId ? {
+        ...f,
+        status: 'ready',
+        text: `Content extracted from ${file.name}.`,
+        pageCount: 1
+      } : f));
+    }
+    setExtractingFile(false);
+  }
+
+  function handlePaste(e) {
+    if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+      e.preventDefault();
+      handleProcessFile(e.clipboardData.files[0]);
+    }
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e) {
+    e.preventDefault();
+    setIsDragging(false);
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleProcessFile(e.dataTransfer.files[0]);
+    }
+  }
+
   async function handleSendChatMessage(textToSend = null) {
     const text = (textToSend || chatInput).trim();
-    if (!text || chatLoading) return;
+    if ((!text && stagedFiles.length === 0) || chatLoading) return;
+
+    const currentFiles = [...stagedFiles];
+    let fileBadge = "";
+    if (currentFiles.length > 0) {
+      fileBadge = ` [Attached: ${currentFiles.map(f => f.name).join(', ')}]`;
+    }
+
+    const displayText = text || `I have attached ${currentFiles.map(f => f.name).join(', ')}. Please clear my doubts on this material.`;
 
     const userMsg = {
       role: 'user',
-      content: text,
+      content: displayText + (text && fileBadge ? `\n\n*(📎 ${currentFiles.map(f => f.name).join(', ')})*` : ''),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -341,16 +974,19 @@ export default function App() {
     setChatInput('');
     setChatLoading(true);
 
+    const stagedContext = currentFiles.map(f => `[Uploaded Document: ${f.name}]\n${f.text}`).join('\n\n');
+
     try {
       if (isApiOnline) {
         const res = await fetch(`${API_BASE}/ai/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            message: text,
+            message: displayText,
             history: chatMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
             subject: chatSubject === 'All' ? null : chatSubject,
-            persona: chatPersona
+            persona: chatPersona,
+            materials_context: stagedContext || null
           })
         });
         if (res.ok) {
@@ -362,10 +998,25 @@ export default function App() {
               content: data.reply,
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               followups: data.suggested_followups || [],
-              aiPowered: data.ai_powered
+              aiPowered: data.ai_powered,
+              cited_materials: data.cited_materials || [chatSubject]
             }
           ]);
           setChatLoading(false);
+          if (currentFiles.length > 0) {
+            currentFiles.forEach(f => {
+              if (f.text && !uploadedMaterials.some(m => m.title === f.name)) {
+                setUploadedMaterials(prev => [{
+                  id: `mat-${Date.now()}`,
+                  subject: chatSubject === 'All' ? 'General' : chatSubject,
+                  topic: chatSubject,
+                  title: f.name,
+                  content: f.text
+                }, ...prev]);
+              }
+            });
+            setStagedFiles([]);
+          }
           return;
         }
       }
@@ -375,11 +1026,16 @@ export default function App() {
 
     // Client-side local fallback
     setTimeout(() => {
+      const subjectMaterials = uploadedMaterials.filter(m => chatSubject === 'All' || m.subject.toLowerCase() === chatSubject.toLowerCase());
+      const rawNotes = currentFiles[0]?.text || subjectMaterials[0]?.content || "";
+      const excerpt = rawNotes.slice(0, 240);
+
       const fallbackReplies = {
-        socratic: `That's an insightful question about **${chatSubject === 'All' ? 'your studies' : chatSubject}**! Notice how active recall strengthens memory half-life: What do you predict happens to recall probability if we wait twice as long before reviewing?`,
-        exam_prep: `### Exam High-Yield Summary\n- **Key Invariant:** Under exam conditions, always identify the baseline state transition first.\n- **Duolingo HLR Principle:** Each correct review doubles estimated half-life (h), pushing the forgetting threshold further into the future.\n- **Common Trap:** Do not assume linear degradation; retention decays exponentially as 2^(-Δ/h).`,
-        eli5: `Think of this like riding a bicycle: The first time you learn, you wobble. But each time you practice right before you forget, your brain builds stronger muscle memory so you can ride longer without falling!`
+        socratic: `Regarding your doubt in **${chatSubject === 'All' ? 'your uploaded studies' : chatSubject}**, let's refer directly to your notes:\n\n> *\"${excerpt || 'Primary state machine invariant ensures fault tolerance and reliable transitions.'}...\"*\n\n**Core Intuition:** In **${chatSubject}**, the critical principle is maintaining bounded state transitions. When you asked *\"${displayText.slice(0, 60)}\"*, consider: What invariant prevents this from corrupting system memory?`,
+        exam_prep: `### High-Yield Doubt Resolution (${chatSubject})\n- **From Your Notes:** *\"${excerpt.slice(0, 160) || 'State invariant definition'}...\"*\n- **Key Exam Rule:** Under testing conditions, always identify the failure boundary and Coffman conditions first.\n- **Duolingo HLR Principle:** Each correct review doubles estimated half-life ($h = 2^{\\theta x}$), preventing exponential decay ($p = 2^{-\\Delta/h}$).`,
+        eli5: `Think of your uploaded materials for **${chatSubject}** like a safety instruction card on an airplane! It says: *\"${excerpt.slice(0, 130) || 'Keep all channels clear and verified'}...\"*\n\nIn plain English: you always need a simple confirmation before making irreversible changes so nothing gets scrambled!`
       };
+
       setChatMessages(prev => [
         ...prev,
         {
@@ -387,22 +1043,132 @@ export default function App() {
           content: fallbackReplies[chatPersona] || fallbackReplies.socratic,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           followups: [
-            "Can you test me on this concept?",
-            "What is a real-world software example?",
-            "How does this connect to my study plan?"
+            `Can you quiz me on ${chatSubject}?`,
+            `What is a real-world software example from these notes?`,
+            `How does this connect to my exam plan?`
           ],
-          aiPowered: false
+          aiPowered: false,
+          cited_materials: [chatSubject]
         }
       ]);
       setChatLoading(false);
+      setStagedFiles([]);
     }, 600);
   }
 
-  async function handleSolveDoubt(presetDoubt = null) {
-    const text = (presetDoubt || doubtInput).trim();
-    if (!text || doubtLoading) return;
+  async function handleIngestStagedMaterial() {
+    const file = stagedFiles[0];
+    const contentToIngest = (file?.text || chatInput).trim();
+    if (!contentToIngest) return;
 
-    if (presetDoubt) setDoubtInput(presetDoubt);
+    const titleToUse = file?.name?.replace(/\.[^/.]+$/, '') || materialForm.title || `${chatSubject} Study Excerpt`;
+    const topicToUse = materialForm.topic || chatSubject;
+    const targetSubject = chatSubject === 'All' ? 'Operating Systems' : chatSubject;
+
+    setUploading(true);
+    setUploadSuccess(false);
+
+    try {
+      if (isApiOnline) {
+        const res = await fetch(`${API_BASE}/materials`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subject: targetSubject,
+            topic: topicToUse,
+            title: titleToUse,
+            content: contentToIngest
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.concept) {
+            setConcepts(prev => [data.concept, ...prev]);
+            setSelectedConceptId(data.concept.id);
+          }
+          if (data.generated_questions) {
+            setQuestions(prev => [...data.generated_questions, ...prev]);
+          }
+          const newMat = {
+            id: `mat-${Date.now()}`,
+            subject: targetSubject,
+            topic: topicToUse,
+            title: titleToUse,
+            content: contentToIngest
+          };
+          setUploadedMaterials(prev => [newMat, ...prev]);
+          setStagedFiles([]);
+          setChatInput('');
+          setUploading(false);
+          setUploadSuccess(true);
+          setChatMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              content: `✓ **${titleToUse}** has been ingested into your **${targetSubject}** knowledge base!\n\nExtracted concepts and synthesized questions have been added to your Active Recall pool. The Chatbot is now grounded in this material—ask any doubt or launch the quiz on the right!`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              followups: [
+                `Test my knowledge on ${titleToUse}`,
+                `Summarize key concepts from ${titleToUse}`,
+                `What are the most difficult exam questions on this?`
+              ],
+              aiPowered: true
+            }
+          ]);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Material upload fallback', err);
+    }
+
+    // Client fallback
+    const newId = `c-usr-${Date.now()}`;
+    const newConcept = {
+      id: newId,
+      subject: targetSubject,
+      topic: topicToUse,
+      name: titleToUse,
+      difficulty: 'Medium',
+      n_right: 0,
+      n_wrong: 0,
+      days_ago: 0,
+      last_practiced_at: new Date().toISOString(),
+      half_life_days: 1.0,
+      p_hat: 0.99,
+      is_due: false,
+      delta_days: 0.0
+    };
+    setConcepts(prev => [newConcept, ...prev]);
+    setUploadedMaterials(prev => [{
+      id: `mat-${Date.now()}`,
+      subject: targetSubject,
+      topic: topicToUse,
+      title: titleToUse,
+      content: contentToIngest
+    }, ...prev]);
+    setStagedFiles([]);
+    setChatInput('');
+    setUploading(false);
+    setUploadSuccess(true);
+    setChatMessages(prev => [
+      ...prev,
+      {
+        role: 'model',
+        content: `✓ Added **${titleToUse}** to your **${targetSubject}** materials. Ask me any doubt about it!`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        followups: [
+          `Explain the core mechanism in simple terms`,
+          `Quiz me on ${titleToUse}`
+        ],
+        aiPowered: false
+      }
+    ]);
+  }
+  async function handleSolveDoubt(presetDoubt = null) {
+    const text = presetDoubt || doubtInput;
+    if (!text.trim()) return;
+
     setDoubtLoading(true);
     setSelectedChallengeOption(null);
 
@@ -535,11 +1301,26 @@ export default function App() {
         loadDashboard();
         loadConcepts();
         loadTodayPlan();
+        loadMaterials();
       } else {
         setIsApiOnline(false);
       }
     } catch {
       setIsApiOnline(false);
+    }
+  }
+
+  async function loadMaterials() {
+    try {
+      const res = await fetch(`${API_BASE}/materials`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          setUploadedMaterials(data);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load materials from backend', e);
     }
   }
 
@@ -682,43 +1463,354 @@ export default function App() {
     };
   }, [dashboardData, concepts, settings]);
 
+  // ---------------------------------------------------------------------------
+  // Time Parsing & Slicing Helpers for Study Planner
+  // ---------------------------------------------------------------------------
+  function parseTimeToMinutes(tStr) {
+    if (!tStr) return 450;
+    const str = String(tStr).trim();
+    if (str.toUpperCase().includes('AM') || str.toUpperCase().includes('PM')) {
+      const match = str.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (match) {
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const period = match[3].toUpperCase();
+        if (period === 'PM' && h < 12) h += 12;
+        if (period === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
+      }
+    }
+    const parts = str.split(':');
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1] || '0', 10);
+  }
+
+  function formatMinutesToTime(totalMins) {
+    const mins = ((totalMins % 1440) + 1440) % 1440;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const period = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
+  }
+
+  function formatStripTimeSlot(startStr, endStr) {
+    if (!startStr || !endStr) return '';
+    const clean = s => s.trim().replace(/^0/, '').toLowerCase();
+    return `${clean(startStr)} to ${clean(endStr)}`;
+  }
+
+  function getCognitiveTier(startMins) {
+    const m = ((startMins % 1440) + 1440) % 1440;
+    if (m >= 360 && m < 690) return '🧠 Cognitive Peak';
+    if (m >= 690 && m < 840) return '🌱 Steady Flow';
+    if (m >= 840 && m < 1050) return '⚡ High Energy';
+    if (m >= 1050 && m < 1230) return '🌅 Active Consolidation';
+    return '🌙 Night Review';
+  }
+
+  function handleAddFreeTimeWindow() {
+    if (!newWindowStart || !newWindowEnd) return;
+    const newWin = {
+      id: `win-${Date.now()}`,
+      start: newWindowStart,
+      end: newWindowEnd,
+      label: newWindowLabel.trim() || 'Study Window'
+    };
+    setFreeTimeWindows(prev => [...prev, newWin]);
+    setShowAddWindow(false);
+  }
+
+  function handleRemoveFreeTimeWindow(winId) {
+    setFreeTimeWindows(prev => prev.filter(w => w.id !== winId));
+  }
+
+  function handleMoveWindowUp(index) {
+    if (index <= 0) return;
+    setFreeTimeWindows(prev => {
+      const next = [...prev];
+      const temp = next[index - 1];
+      next[index - 1] = next[index];
+      next[index] = temp;
+      return next;
+    });
+  }
+
+  function handleMoveWindowDown(index) {
+    if (index >= freeTimeWindows.length - 1) return;
+    setFreeTimeWindows(prev => {
+      const next = [...prev];
+      const temp = next[index + 1];
+      next[index + 1] = next[index];
+      next[index] = temp;
+      return next;
+    });
+  }
+
+  function handleApplyWindowPreset(presetType) {
+    if (presetType === 'morning_evening') {
+      setFreeTimeWindows([
+        { id: 'win-1', start: '07:00', end: '08:30', label: 'Morning High Focus' },
+        { id: 'win-2', start: '20:00', end: '21:30', label: 'Evening Review' }
+      ]);
+    } else if (presetType === 'afternoon') {
+      setFreeTimeWindows([
+        { id: 'win-aft', start: '14:00', end: '16:00', label: 'Afternoon Deep Work' }
+      ]);
+    } else if (presetType === 'full_academic') {
+      setFreeTimeWindows([
+        { id: 'win-ac1', start: '08:00', end: '10:00', label: 'Morning Deep Work' },
+        { id: 'win-ac2', start: '15:00', end: '17:00', label: 'Afternoon Focus' },
+        { id: 'win-ac3', start: '20:30', end: '22:00', label: 'Evening Session' }
+      ]);
+    }
+  }
+
+  function handleToggleTileCompleted(tileId) {
+    setCompletedTileIds(prev => {
+      const next = new Set(prev);
+      if (next.has(tileId)) {
+        next.delete(tileId);
+      } else {
+        next.add(tileId);
+      }
+      return next;
+    });
+  }
+
+  function handleUpdateManualTile(tileId, field, value) {
+    setCustomSlots(prev => {
+      const existing = prev.find(s => s.id === tileId);
+      if (existing) {
+        return prev.map(s => s.id === tileId ? { ...s, [field]: value } : s);
+      } else {
+        return [...prev, { id: tileId, [field]: value }];
+      }
+    });
+  }
+
   const planSchedule = useMemo(() => {
-    if (todayPlan) return todayPlan;
-
     const subjects = [...new Set(concepts.map(c => c.subject))];
-    const dailyMins = settings.daily_minutes;
 
-    const subjectWeights = {};
-    subjects.forEach(subj => {
-      const subjConcepts = concepts.filter(c => c.subject === subj);
-      const avgP = subjConcepts.length ? subjConcepts.reduce((a, b) => a + b.p_hat, 0) / subjConcepts.length : 0.8;
-      const dueRatio = subjConcepts.filter(c => c.is_due).length / (subjConcepts.length || 1);
-      const prio = settings.subject_priorities[subj] || 1.0;
-      subjectWeights[subj] = prio * ((1.0 - avgP) * 2.0 + dueRatio + 0.2);
+    // Quiz data analysis for AI optimal session length:
+    const totalRight = concepts.reduce((acc, c) => acc + (c.n_right || 0), 0);
+    const totalWrong = concepts.reduce((acc, c) => acc + (c.n_wrong || 0), 0);
+    const totalQAttempts = totalRight + totalWrong;
+    const avgAccuracy = totalQAttempts > 0 ? (totalRight / totalQAttempts) : 0.70;
+    const highDecayCount = concepts.filter(c => (c.p_hat || 0.70) < 0.65 || c.is_due).length;
+
+    let effectiveDuration = sessionDuration;
+    let aiOptimization = null;
+
+    if (sessionLengthMode === 'ai_optimized') {
+      const baseD = [20, 30, 45].includes(Number(initialSessionDuration)) ? Number(initialSessionDuration) : 30;
+      let optimalD = 30;
+      let reason = '';
+      if (avgAccuracy < 0.65 || highDecayCount >= 3) {
+        optimalD = 20;
+        reason = `AI tuned session length to 20m (from initial ${baseD}m): Quiz data indicates ${highDecayCount} concepts with memory decay. Shorter intervals optimize retention and prevent cognitive fatigue.`;
+      } else if (avgAccuracy > 0.85 && highDecayCount <= 1) {
+        optimalD = baseD >= 30 ? 45 : 30;
+        reason = `AI fixed session length to ${optimalD}m (from initial ${baseD}m): High quiz score (${Math.round(avgAccuracy * 100)}% accuracy) supports extended deep work sessions.`;
+      } else {
+        optimalD = 30;
+        reason = `AI fixed session length to 30m: Balanced focus duration for active recall and steady memory consolidation.`;
+      }
+      effectiveDuration = optimalD;
+      aiOptimization = {
+        mode: 'ai_optimized',
+        initial_duration: baseD,
+        optimal_duration: optimalD,
+        avg_accuracy: avgAccuracy,
+        high_decay_count: highDecayCount,
+        reason
+      };
+    } else {
+      effectiveDuration = [20, 30, 45].includes(Number(sessionDuration)) ? Number(sessionDuration) : 30;
+      aiOptimization = {
+        mode: 'manual',
+        initial_duration: effectiveDuration,
+        optimal_duration: effectiveDuration,
+        avg_accuracy: avgAccuracy,
+        high_decay_count: highDecayCount,
+        reason: `Manual mode: Session duration locked at ${effectiveDuration}m by your selection.`
+      };
+    }
+
+    const duration = effectiveDuration;
+
+    // 1. Availability Slicing: Slice free-time windows into uniform duration blocks
+    // Eliminates erratic micro-durations (< sessionDuration)
+    const slicedSlots = [];
+    (freeTimeWindows || []).forEach(w => {
+      try {
+        const startM = parseTimeToMinutes(w.start);
+        let endM = parseTimeToMinutes(w.end);
+        if (endM <= startM) endM += 1440;
+        const totalWindow = endM - startM;
+        const numBlocks = Math.floor(totalWindow / duration);
+        let curS = startM;
+        for (let i = 0; i < numBlocks; i++) {
+          const curE = curS + duration;
+          const sFmt = formatMinutesToTime(curS);
+          const eFmt = formatMinutesToTime(curE);
+          slicedSlots.push({
+            start_mins: curS % 1440,
+            end_mins: curE % 1440,
+            start_time: sFmt,
+            end_time: eFmt,
+            time_slot: `${sFmt} - ${eFmt}`,
+            time_slot_formatted: formatStripTimeSlot(sFmt, eFmt),
+            duration_minutes: duration,
+            cognitive_tier: getCognitiveTier(curS % 1440),
+            window_label: w.label || 'Availability Window'
+          });
+          curS = curE;
+        }
+      } catch (e) {
+        console.warn('Window slice error', e);
+      }
     });
 
-    const totalWeight = Object.values(subjectWeights).reduce((a, b) => a + b, 0) || 1;
-    const blocks = subjects.map(subj => {
-      const subjConcepts = concepts.filter(c => c.subject === subj).sort((a, b) => a.p_hat - b.p_hat);
-      const allocated = Math.max(10, Math.round(((subjectWeights[subj] / totalWeight) * dailyMins) / 5) * 5);
+    // Fallback if no valid windows
+    if (slicedSlots.length === 0) {
+      const anchorM = 450; // 07:30 AM
+      let curS = anchorM;
+      for (let i = 0; i < 3; i++) {
+        const curE = curS + duration;
+        const sFmt = formatMinutesToTime(curS);
+        const eFmt = formatMinutesToTime(curE);
+        slicedSlots.push({
+          start_mins: curS % 1440,
+          end_mins: curE % 1440,
+          start_time: sFmt,
+          end_time: eFmt,
+          time_slot: `${sFmt} - ${eFmt}`,
+          time_slot_formatted: formatStripTimeSlot(sFmt, eFmt),
+          duration_minutes: duration,
+          cognitive_tier: getCognitiveTier(curS % 1440),
+          window_label: 'AI-Optimized Slot'
+        });
+        curS = curE + 10;
+      }
+    }
+
+    // 2. Evaluate Weak & Difficult Concepts from HLR, Nominal Difficulty, and Quiz Analytics
+    const diffWeights = { 'Hard': 3.5, 'Medium': 2.0, 'Easy': 1.0 };
+    const evaluatedConcepts = concepts.map(c => {
+      const nw = c.n_wrong || 0;
+      const nr = c.n_right || 0;
+      const dWeight = diffWeights[c.difficulty] || 2.0;
+      const weakness = (1.0 - (c.p_hat || 0.8)) * 2.0 + (nw / Math.max(1, nw + nr)) * 1.5 + (c.is_due ? 1.0 : 0.0);
+      const difficultyScore = (dWeight * 2.0) + (weakness * 1.5) + (c.is_due ? 1.0 : 0.0);
+      return {
+        ...c,
+        difficulty_score: difficultyScore,
+        weakness_score: weakness
+      };
+    });
+
+    // Rank subjects by difficulty: most difficult subjects first
+    const subjectDifficulties = {};
+    subjects.forEach(subj => {
+      const sc = evaluatedConcepts.filter(c => c.subject === subj);
+      const avgDiff = sc.reduce((acc, c) => acc + c.difficulty_score, 0) / Math.max(1, sc.length);
+      const hardCount = sc.filter(c => c.difficulty === 'Hard').length;
+      const prio = settings.subject_priorities[subj] || 1.0;
+      // Combined subject difficulty: concept hardness, errors, and priority
+      subjectDifficulties[subj] = (avgDiff * 2.0) + (hardCount * 1.5) + prio;
+    });
+
+    // Ranked subjects: most difficult subject at index 0, so slots on top of the list receive the hardest subjects
+    const rankedSubjects = [...subjects].sort((a, b) => (subjectDifficulties[b] || 1) - (subjectDifficulties[a] || 1));
+    const rankedConcepts = [...evaluatedConcepts].sort((a, b) => b.difficulty_score - a.difficulty_score);
+
+    // 3. Build Interactive Strips / Tiles
+    const tiles = [];
+    const usedConceptIds = new Set();
+
+    slicedSlots.forEach((slot, idx) => {
+      const tileId = `tile-${idx + 1}`;
+      const manualOverride = customSlots.find(s => s.id === tileId);
+
+      // Determine subject: slots on the top of the list get the most difficult subjects
+      const assignedSubject = manualOverride?.subject || rankedSubjects[idx % Math.max(1, rankedSubjects.length)] || 'Operating Systems';
+
+      // Determine specific weak concept:
+      let chosenConcept = null;
+      if (manualOverride?.target_concept_id) {
+        chosenConcept = concepts.find(c => c.id === manualOverride.target_concept_id);
+      }
+      if (!chosenConcept) {
+        const subjWeak = rankedConcepts.filter(c => c.subject === assignedSubject && !usedConceptIds.has(c.id));
+        chosenConcept = subjWeak[0] || rankedConcepts.find(c => c.subject === assignedSubject) || rankedConcepts[0];
+      }
+
+      if (chosenConcept) {
+        usedConceptIds.add(chosenConcept.id);
+      }
+
+      const pPct = Math.round((chosenConcept?.p_hat || 0.8) * 100);
+      const urgencyTxt = (chosenConcept?.p_hat || 0.8) < 0.50
+        ? `Critical memory decay (${pPct}% recall, h=${chosenConcept?.half_life_days || 1}d)`
+        : chosenConcept?.is_due
+        ? `Due for active recall review (${pPct}% retention threshold)`
+        : `Sustained memory consolidation (${pPct}% recall)`;
+
+      tiles.push({
+        id: tileId,
+        time_slot: slot.time_slot,
+        time_slot_formatted: slot.time_slot_formatted || formatStripTimeSlot(slot.start_time, slot.end_time),
+        start_time: slot.start_time,
+        end_time: slot.end_time,
+        duration_minutes: slot.duration_minutes,
+        subject: assignedSubject,
+        target_topic: chosenConcept?.name || 'Core Fundamentals',
+        recommended_topic: `Recommended Topic: ${chosenConcept?.name || 'Core Fundamentals'}`,
+        target_concept_id: chosenConcept?.id,
+        target_concept: chosenConcept,
+        concept_difficulty: chosenConcept?.difficulty || 'Medium',
+        productivity_tier: slot.cognitive_tier,
+        mode_tier: sessionLengthMode === 'ai_optimized' ? 'AI-Optimized' : 'Manual',
+        urgency_reason: urgencyTxt,
+        decay_p: chosenConcept?.p_hat || 0.8,
+        estimated_questions: Math.max(3, Math.min(8, Math.round(duration / 5))),
+        is_completed: completedTileIds.has(tileId),
+        status: completedTileIds.has(tileId) ? 'completed' : 'ready'
+      });
+    });
+
+    // 4. Construct Blocks for backward compatibility
+    const blocks = rankedSubjects.map(subj => {
+      const subjTiles = tiles.filter(t => t.subject === subj);
+      const subjConcepts = subjTiles.map(t => t.target_concept).filter(Boolean);
       return {
         id: `block-${subj.toLowerCase().replace(/\s+/g, '-')}`,
         subject: subj,
-        allocated_minutes: allocated,
-        estimated_questions: Math.min(8, Math.max(3, subjConcepts.length * 2)),
-        avg_p_hat: parseFloat((subjConcepts.reduce((a, b) => a + b.p_hat, 0) / subjConcepts.length).toFixed(3)),
-        concepts: subjConcepts.slice(0, 2)
+        allocated_minutes: subjTiles.reduce((a, b) => a + b.duration_minutes, 0),
+        estimated_questions: subjTiles.reduce((a, b) => a + b.estimated_questions, 0),
+        avg_p_hat: subjTiles.length ? parseFloat((subjTiles.reduce((a, b) => a + b.decay_p, 0) / subjTiles.length).toFixed(3)) : 0.8,
+        concepts: subjConcepts.length ? subjConcepts : concepts.filter(c => c.subject === subj).slice(0, 2)
       };
-    }).sort((a, b) => a.avg_p_hat - b.avg_p_hat);
+    }).filter(b => b.allocated_minutes > 0);
 
     return {
       date: new Date().toISOString().split('T')[0],
-      daily_minutes_goal: dailyMins,
-      total_scheduled_minutes: blocks.reduce((a, b) => a + b.allocated_minutes, 0),
+      mode: sessionLengthMode,
+      session_length_mode: sessionLengthMode,
+      session_duration: duration,
+      initial_session_duration: initialSessionDuration,
+      optimal_session_duration: duration,
+      ai_duration_optimization: aiOptimization,
+      anchor_time: '07:30 AM',
+      free_time_windows: freeTimeWindows,
+      daily_minutes_goal: settings.daily_minutes,
+      total_scheduled_minutes: tiles.reduce((a, b) => a + b.duration_minutes, 0),
       due_concepts_total: concepts.filter(c => c.is_due).length,
-      blocks
+      tiles,
+      strips: tiles,
+      blocks: blocks.length ? blocks : [{ id: 'b-default', subject: 'Operating Systems', allocated_minutes: 30, estimated_questions: 5, avg_p_hat: 0.75, concepts: [] }]
     };
-  }, [todayPlan, concepts, settings]);
+  }, [concepts, settings, sessionLengthMode, initialSessionDuration, sessionDuration, freeTimeWindows, customSlots, completedTileIds, scheduleSeed]);
 
   // Quiz logic
   function startQuizSession(subject = null, conceptId = null) {
@@ -957,6 +2049,28 @@ export default function App() {
     return questions.filter(q => q.status === questionFilter);
   }, [questions, questionFilter]);
 
+  const subjectConcepts = useMemo(() => {
+    return concepts.filter(c => chatSubject === 'All' || c.subject.toLowerCase() === chatSubject.toLowerCase());
+  }, [concepts, chatSubject]);
+
+  const subjectRecall = useMemo(() => {
+    if (!subjectConcepts.length) return 85;
+    const avg = subjectConcepts.reduce((acc, c) => acc + c.p_hat, 0) / subjectConcepts.length;
+    return Math.round(avg * 100);
+  }, [subjectConcepts]);
+
+  const subjectDueCount = useMemo(() => {
+    return subjectConcepts.filter(c => c.is_due).length;
+  }, [subjectConcepts]);
+
+  const subjectQuestionCount = useMemo(() => {
+    return questions.filter(q => chatSubject === 'All' || q.subject.toLowerCase() === chatSubject.toLowerCase()).length;
+  }, [questions, chatSubject]);
+
+  const subjectMaterials = useMemo(() => {
+    return uploadedMaterials.filter(m => chatSubject === 'All' || m.subject.toLowerCase() === chatSubject.toLowerCase());
+  }, [uploadedMaterials, chatSubject]);
+
   return (
     <div className="app-container">
       {/* ================= HEADER BAR ================= */}
@@ -993,28 +2107,16 @@ export default function App() {
               <Zap size={14} /> Quiz Mode
             </button>
             <button
-              className={`nav-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
-              onClick={() => setActiveTab('chat')}
+              className={`nav-tab-btn ${activeTab === 'materials' ? 'active' : ''}`}
+              onClick={() => setActiveTab('materials')}
             >
-              <MessageSquare size={14} /> AI Buddy
-            </button>
-            <button
-              className={`nav-tab-btn ${activeTab === 'doubts' ? 'active' : ''}`}
-              onClick={() => setActiveTab('doubts')}
-            >
-              <HelpCircle size={14} /> Doubt Solver
+              <BookOpen size={14} /> Materials & AI
             </button>
             <button
               className={`nav-tab-btn ${activeTab === 'mnemonics' ? 'active' : ''}`}
               onClick={() => setActiveTab('mnemonics')}
             >
               <Sparkles size={14} /> Mnemonic Lab
-            </button>
-            <button
-              className={`nav-tab-btn ${activeTab === 'materials' ? 'active' : ''}`}
-              onClick={() => setActiveTab('materials')}
-            >
-              <BookOpen size={14} /> Materials & AI
             </button>
             <button
               className={`nav-tab-btn ${activeTab === 'curve' ? 'active' : ''}`}
@@ -1051,7 +2153,7 @@ export default function App() {
       </header>
 
       {/* ================= MAIN CONTAINER ================= */}
-      <main className="main-wrapper">
+      <main className={`main-wrapper ${activeTab === 'materials' ? 'materials-active' : ''}`}>
         {/* ================= SCREEN 1: DASHBOARD ================= */}
         {activeTab === 'dashboard' && (
           <div className="animate-fade-in">
@@ -1274,10 +2376,9 @@ export default function App() {
                             className="btn-secondary btn-sm"
                             title="Solve doubt on this concept"
                             onClick={() => {
-                              setDoubtConcept(c.name);
-                              setDoubtSubject(c.subject);
-                              setDoubtInput(`I have a doubt about ${c.name} in ${c.subject}: What is the core mechanism and what common mistakes should I avoid?`);
-                              setActiveTab('doubts');
+                              setChatSubject(c.subject);
+                              setChatInput(`I have a doubt about ${c.name} in ${c.subject}: What is the core mechanism and what common mistakes should I avoid?`);
+                              setActiveTab('materials');
                             }}
                           >
                             <HelpCircle size={11} color="var(--mint-dark)" /> Doubt
@@ -1307,74 +2408,375 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= SCREEN 2: TODAY'S PLAN ================= */}
+        {/* ================= SCREEN 2: TODAY'S PLAN (TILE-BASED ADAPTIVE SCHEDULER) ================= */}
         {activeTab === 'plan' && (
           <div className="animate-fade-in">
+            {/* Plan Header */}
             <div className="section-header">
               <div>
                 <h1 className="section-title">
-                  <Calendar size={18} /> Adaptive HLR Study Plan
+                  <Calendar size={18} /> Adaptive HLR Study Planner
                 </h1>
-                <span className="section-subtitle">
-                  Daily allocation: Minutes weighted by memory decay gradient (1 - p̂) and exam urgency.
-                </span>
               </div>
-              <div>
-                <div className="badge badge-medium" style={{ padding: '6px 12px', fontSize: 11 }}>
-                  <Clock size={12} /> Planned: {planSchedule.total_scheduled_minutes}m / {planSchedule.daily_minutes_goal}m
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div className="badge badge-easy" style={{ padding: '6px 12px', fontSize: 11 }}>
+                  <Layers size={12} /> {planSchedule.tiles?.length || 0} Uniform Sessions
                 </div>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: scheduleSuccessMsg ? 'var(--mint-dark)' : undefined
+                  }}
+                  onClick={handleRecreateSchedule}
+                  disabled={isRecreatingSchedule}
+                  title="Re-create and re-slice your study schedule anytime after making changes"
+                >
+                  <RefreshCw size={13} className={isRecreatingSchedule ? 'animate-spin' : ''} />
+                  {isRecreatingSchedule ? 'Re-creating...' : scheduleSuccessMsg ? '✓ Schedule Re-created!' : 'Re-create Schedule'}
+                </button>
               </div>
             </div>
 
-            <div className="plan-blocks-list" style={{ marginTop: 20 }}>
-              {planSchedule.blocks.map(block => (
-                <div key={block.id} className="plan-block-card">
-                  <div className="plan-block-main">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>{block.subject}</h3>
-                      <span className="badge badge-easy">
-                        <Clock size={11} /> {block.allocated_minutes} Minutes
-                      </span>
-                      <span className="badge badge-medium">
-                        ~{block.estimated_questions} Questions
-                      </span>
-                      <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
-                        Avg Recall: {Math.round(block.avg_p_hat * 100)}%
-                      </span>
-                    </div>
-
-                    <div className="plan-concepts-chips">
-                      <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center', fontFamily: 'var(--font-mono)' }}>Concepts:</span>
-                      {block.concepts.map(c => (
-                        <div
-                          key={c.id}
-                          className="concept-chip"
-                          onClick={() => {
-                            setSelectedConceptId(c.id);
-                            setActiveTab('curve');
-                          }}
-                        >
-                          <span>{c.name}</span>
-                          <span style={{ color: c.p_hat <= 0.70 ? 'var(--coral)' : 'var(--mint-dark)', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-                            {Math.round(c.p_hat * 100)}%
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
+            {/* Controls Panel: Modes, Session Durations, Anchors & Availability Windows */}
+            <div className="schedule-controls-panel">
+              <div className="schedule-header-row">
+                {/* 1. Session Length Mode Switcher (Manual vs AI-Optimized) */}
+                <div>
+                  <label style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                    Session Length Mode
+                  </label>
+                  <div className="mode-switcher-group">
                     <button
-                      className="btn-primary"
-                      onClick={() => startQuizSession(block.subject)}
-                      style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
+                      type="button"
+                      className={`mode-pill-btn ${sessionLengthMode === 'manual' ? 'active' : ''}`}
+                      onClick={() => setSessionLengthMode('manual')}
+                      title="You manually select and lock your exact session duration"
                     >
-                      <Play size={13} /> Start Session
+                      <Sliders size={14} /> Manual Mode
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-pill-btn ${sessionLengthMode === 'ai_optimized' ? 'active' : ''}`}
+                      onClick={() => setSessionLengthMode('ai_optimized')}
+                      title="AI fixes towards optimal session length using your historical quiz performance and fatigue metrics"
+                    >
+                      <Sparkles size={14} color="var(--mint-dark)" /> AI-Optimized Mode
                     </button>
                   </div>
                 </div>
-              ))}
+
+                {/* 2. Session Length Selection based on Mode */}
+                {sessionLengthMode === 'manual' ? (
+                  <div>
+                    <label style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                      Select Session Length (Fixed)
+                    </label>
+                    <div className="duration-pill-group">
+                      {[20, 30, 45].map(mins => (
+                        <button
+                          key={mins}
+                          type="button"
+                          className={`duration-btn ${sessionDuration === mins ? 'active' : ''}`}
+                          onClick={() => setSessionDuration(mins)}
+                          title={`Lock in ${mins}-minute session length`}
+                        >
+                          {mins}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                      Initial Baseline Length
+                    </label>
+                    <div className="duration-pill-group">
+                      {[20, 30, 45].map(mins => (
+                        <button
+                          key={mins}
+                          type="button"
+                          className={`duration-btn ${initialSessionDuration === mins ? 'active' : ''}`}
+                          onClick={() => setInitialSessionDuration(mins)}
+                          title={`Initial baseline duration of ${mins}m for AI optimization`}
+                        >
+                          {mins}m baseline
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Free-Time Availability Windows Section */}
+              <div className="free-windows-section">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>
+                      Availability Windows (Ranked by Willingness to Learn Difficult Subjects)
+                    </span>
+                  </div>
+
+                  {/* Window Presets */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => handleApplyWindowPreset('morning_evening')}
+                      style={{ fontSize: 11, padding: '4px 8px' }}
+                    >
+                      🌅 Morning & Night
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => handleApplyWindowPreset('afternoon')}
+                      style={{ fontSize: 11, padding: '4px 8px' }}
+                    >
+                      ⚡ Afternoon Sprint
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => handleApplyWindowPreset('full_academic')}
+                      style={{ fontSize: 11, padding: '4px 8px' }}
+                    >
+                      🎯 Full Day Academic
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={() => setShowAddWindow(!showAddWindow)}
+                      style={{ fontSize: 11, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <Plus size={12} /> {showAddWindow ? 'Close Form' : 'Add Window'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline Add Window Form */}
+                {showAddWindow && (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', background: '#f8f6f0', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', marginTop: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>From</label>
+                      <input
+                        type="time"
+                        className="text-input"
+                        style={{ padding: '4px 8px', fontSize: 12 }}
+                        value={newWindowStart}
+                        onChange={e => setNewWindowStart(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>To</label>
+                      <input
+                        type="time"
+                        className="text-input"
+                        style={{ padding: '4px 8px', fontSize: 12 }}
+                        value={newWindowEnd}
+                        onChange={e => setNewWindowEnd(e.target.value)}
+                      />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: 2 }}>Window Label</label>
+                      <input
+                        type="text"
+                        className="text-input"
+                        placeholder="e.g., Deep Focus"
+                        style={{ width: '100%', padding: '4px 8px', fontSize: 12 }}
+                        value={newWindowLabel}
+                        onChange={e => setNewWindowLabel(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      style={{ alignSelf: 'flex-end', padding: '6px 14px' }}
+                      onClick={handleAddFreeTimeWindow}
+                    >
+                      <Check size={12} /> Save Window
+                    </button>
+                  </div>
+                )}
+
+                {/* Reorderable Availability Window Cards (Ranked by Willingness) */}
+                <div className="window-priority-list">
+                  {freeTimeWindows.map((w, index) => {
+                    const startM = parseTimeToMinutes(w.start);
+                    let endM = parseTimeToMinutes(w.end);
+                    if (endM <= startM) endM += 1440;
+                    const count = Math.floor((endM - startM) / planSchedule.session_duration);
+                    const isFirst = index === 0;
+                    const isLast = index === freeTimeWindows.length - 1;
+                    return (
+                      <div key={w.id} className="window-priority-card">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <span className="window-rank-badge">
+                            #{index + 1} {isFirst ? 'Most Willing' : isLast && freeTimeWindows.length > 2 ? 'Least Willing' : 'Priority'}
+                          </span>
+                          <span style={{ fontWeight: 800, color: 'var(--ink)', fontSize: 13 }}>{w.label}</span>
+                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--mint-dark)', fontWeight: 700 }}>
+                            {formatMinutesToTime(startM)} – {formatMinutesToTime(endM)}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            ({count} × {planSchedule.session_duration}m sessions)
+                          </span>
+                          {isFirst ? (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--coral)', background: 'rgba(239, 68, 68, 0.08)', padding: '2px 6px', borderRadius: 4 }}>
+                              🔥 Receives Most Difficult Subjects
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted)', background: '#ede9df', padding: '2px 6px', borderRadius: 4 }}>
+                              Reinforcement & Consolidation
+                            </span>
+                          )}
+                        </div>
+                        <div className="window-actions-group">
+                          <button
+                            type="button"
+                            className="window-reorder-btn"
+                            disabled={isFirst}
+                            onClick={() => handleMoveWindowUp(index)}
+                            title="Move window up (higher willingness to study difficult subjects)"
+                            aria-label="Move window up"
+                          >
+                            <ArrowUp size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="window-reorder-btn"
+                            disabled={isLast}
+                            onClick={() => handleMoveWindowDown(index)}
+                            title="Move window down (lower willingness to study difficult subjects)"
+                            aria-label="Move window down"
+                          >
+                            <ArrowDown size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="window-reorder-btn"
+                            onClick={() => handleRemoveFreeTimeWindow(w.id)}
+                            style={{ color: 'var(--coral)' }}
+                            title="Remove window"
+                            aria-label="Remove window"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
+
+            {/* Strips List Layout (Displayed One Below the Other, NOT Tiles) */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink)' }}>
+                  Study Schedule Strips
+                </h3>
+                <span className="badge badge-easy" style={{ fontSize: 10 }}>
+                  {sessionLengthMode === 'ai_optimized' ? `🧠 AI Fixed (${planSchedule.session_duration}m Sessions)` : `🛠️ User Locked (${planSchedule.session_duration}m Sessions)`}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                  {completedTileIds.size} of {planSchedule.tiles?.length || 0} Sessions Completed
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '4px 10px' }}
+                  onClick={handleRecreateSchedule}
+                  disabled={isRecreatingSchedule}
+                  title="Re-create and refresh your schedule at any time"
+                >
+                  <RefreshCw size={11} className={isRecreatingSchedule ? 'animate-spin' : ''} />
+                  Re-create
+                </button>
+              </div>
+            </div>
+
+            {(!planSchedule.tiles || planSchedule.tiles.length === 0) ? (
+              <div className="glass-card" style={{ padding: 32, textAlign: 'center', color: 'var(--muted)' }}>
+                No study sessions scheduled. Add a free-time availability window above to generate sessions!
+              </div>
+            ) : (
+              <div className="schedule-strips-list">
+                {planSchedule.tiles.map((tile, idx) => {
+                  const isDone = tile.is_completed;
+                  return (
+                    <div
+                      key={tile.id}
+                      className={`schedule-strip ${isDone ? 'completed' : ''}`}
+                    >
+                      {/* Left: Main Content (Time Slot, Subject, Recommended Topic) */}
+                      <div className="strip-main-content">
+                        {/* 1. Time Slot: Top left corner, in green bold font, NOT in a container */}
+                        <div className="strip-time-slot">
+                          {tile.time_slot_formatted || formatStripTimeSlot(tile.start_time, tile.end_time)}
+                        </div>
+
+                        {/* 2. Subject: Biggest font size in the strip, 2 sizes above recommended topic and time slot */}
+                        <div className="strip-subject">
+                          {tile.subject}
+                        </div>
+
+                        {/* 3. Recommended topic: In a color that's a darker shade of the background color */}
+                        <div className="strip-recommended-topic">
+                          <span className="strip-recommended-topic-label">Recommended topic:</span> {tile.target_topic}
+                        </div>
+                      </div>
+
+                      {/* Right: Quick Actions & Metadata (Cognitive peak / night review removed) */}
+                      <div className="strip-side-actions">
+                        <div className="strip-meta-col">
+                          <span style={{ fontSize: 11, fontWeight: 700, color: tile.concept_difficulty === 'Hard' ? 'var(--coral)' : tile.concept_difficulty === 'Medium' ? '#b45309' : 'var(--mint-dark)' }}>
+                            {tile.concept_difficulty ? `${tile.concept_difficulty} Subject Topic` : 'Active Recall'}
+                          </span>
+                          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: tile.decay_p <= 0.70 ? 'var(--coral)' : 'var(--mint-dark)', fontWeight: 600 }}>
+                            Retention: {Math.round(tile.decay_p * 100)}%
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-primary btn-sm"
+                          style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6 }}
+                          onClick={() => startQuizSession(tile.subject, tile.target_concept_id)}
+                          title={`Launch active recall quiz for ${tile.target_topic}`}
+                        >
+                          <Play size={12} /> Launch Quiz
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          style={{
+                            padding: '8px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            background: isDone ? 'var(--mint-bg)' : undefined,
+                            borderColor: isDone ? 'var(--mint)' : undefined,
+                            color: isDone ? 'var(--mint-dark)' : undefined
+                          }}
+                          onClick={() => handleToggleTileCompleted(tile.id)}
+                          title="Toggle completion status"
+                        >
+                          <CheckCircle2 size={13} color={isDone ? 'var(--mint-dark)' : 'var(--muted)'} />
+                          {isDone ? 'Completed' : 'Done'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* 7-Day Memory Decay Forecast */}
             <div className="glass-card" style={{ marginTop: 28 }}>
@@ -1601,10 +3003,10 @@ export default function App() {
                       } else {
                         setChatInput(`I scored 100% on my recent quiz! What advanced edge cases or tricky exam questions should I practice next?`);
                       }
-                      setActiveTab('chat');
+                      setActiveTab('materials');
                     }}
                   >
-                    <MessageSquare size={14} color="var(--mint-dark)" /> Discuss with AI Buddy
+                    <MessageSquare size={14} color="var(--mint-dark)" /> Discuss with AI Tutor
                   </button>
                   <button className="btn-secondary" onClick={() => setActiveTab('curve')}>
                     <LineChart size={14} /> View Forgetting Curves
@@ -1618,366 +3020,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= SCREEN: AI STUDY BUDDY (CHATBOT) ================= */}
-        {activeTab === 'chat' && (
-          <div className="animate-fade-in chat-window">
-            <div className="chat-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--mint-bg)', border: '1px solid var(--mint)', display: 'grid', placeItems: 'center', color: 'var(--mint-dark)' }}>
-                  <Bot size={18} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    Socratic AI Study Buddy
-                    <span className="badge badge-easy" style={{ fontSize: 10 }}>Gemini 2.0</span>
-                  </h3>
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                    Active recall tutor grounded in your memory half-life metrics
-                  </span>
-                </div>
-              </div>
-
-              {/* Persona and Subject Controls */}
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <div className="persona-selector">
-                  <button
-                    className={`persona-pill ${chatPersona === 'socratic' ? 'active' : ''}`}
-                    onClick={() => setChatPersona('socratic')}
-                    title="Active recall tutor that asks guiding questions"
-                  >
-                    🧠 Socratic Tutor
-                  </button>
-                  <button
-                    className={`persona-pill ${chatPersona === 'exam_prep' ? 'active' : ''}`}
-                    onClick={() => setChatPersona('exam_prep')}
-                    title="High-yield exam summaries and edge-cases"
-                  >
-                    🎯 Exam Coach
-                  </button>
-                  <button
-                    className={`persona-pill ${chatPersona === 'eli5' ? 'active' : ''}`}
-                    onClick={() => setChatPersona('eli5')}
-                    title="Simple analogies with zero jargon"
-                  >
-                    💡 ELI5 Explainer
-                  </button>
-                </div>
-
-                <select
-                  className="select-input"
-                  style={{ width: 'auto', padding: '5px 10px', fontSize: 11 }}
-                  value={chatSubject}
-                  onChange={e => setChatSubject(e.target.value)}
-                >
-                  <option value="All">All Subjects</option>
-                  <option value="Artificial Intelligence">AI & Neural Nets</option>
-                  <option value="Operating Systems">Operating Systems</option>
-                  <option value="Mathematics">Mathematics</option>
-                  <option value="Distributed Systems">Distributed Systems</option>
-                </select>
-
-                <button
-                  className="btn-secondary btn-sm"
-                  onClick={() => setChatMessages([
-                    {
-                      role: 'model',
-                      content: "Chat cleared! What new concept or doubt would you like to master?",
-                      timestamp: 'Just now',
-                      followups: [
-                        "Quiz me on my weakest concept",
-                        "Explain Bayes Theorem & Posterior Update",
-                        "How do I prevent memory decay in Distributed Systems?"
-                      ]
-                    }
-                  ])}
-                  title="Reset conversation"
-                >
-                  <RotateCcw size={12} /> Clear
-                </button>
-              </div>
-            </div>
-
-            {/* Chat Feed */}
-            <div className="chat-feed">
-              {chatMessages.map((msg, idx) => (
-                <div key={idx} className={`chat-msg-row ${msg.role === 'user' ? 'user' : 'ai'}`}>
-                  <div className={`chat-avatar ${msg.role === 'user' ? 'user-av' : 'ai-av'}`}>
-                    {msg.role === 'user' ? 'U' : <Sparkles size={15} />}
-                  </div>
-                  <div>
-                    <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'ai'}`}>
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
-                    </div>
-                    <div className="chat-meta">
-                      <span>{msg.timestamp}</span>
-                      {msg.aiPowered && <span style={{ color: 'var(--mint-dark)' }}>• Gemini Live</span>}
-                    </div>
-
-                    {msg.followups && msg.followups.length > 0 && (
-                      <div className="chat-chip-container">
-                        {msg.followups.map((chip, cIdx) => (
-                          <button
-                            key={cIdx}
-                            className="chat-suggestion-chip"
-                            onClick={() => handleSendChatMessage(chip)}
-                          >
-                            ↳ {chip}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {chatLoading && (
-                <div className="chat-msg-row ai">
-                  <div className="chat-avatar ai-av">
-                    <Sparkles size={15} />
-                  </div>
-                  <div className="chat-bubble ai" style={{ color: 'var(--muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <RefreshCw size={13} className="animate-spin" /> FocusFlow AI is thinking...
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Chat Input Bar */}
-            <div className="chat-input-bar">
-              <input
-                type="text"
-                className="chat-input-field"
-                placeholder={chatLoading ? "AI is generating..." : `Ask your study buddy anything about ${chatSubject === 'All' ? 'your subjects' : chatSubject}... (e.g. 'Test me on Raft terms')`}
-                value={chatInput}
-                disabled={chatLoading}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') {
-                    handleSendChatMessage();
-                  }
-                }}
-              />
-              <button
-                className="btn-primary"
-                style={{ padding: '10px 18px', display: 'flex', alignItems: 'center', gap: 6 }}
-                onClick={() => handleSendChatMessage()}
-                disabled={chatLoading || !chatInput.trim()}
-              >
-                <Send size={14} /> Send
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ================= SCREEN: DOUBT SOLVER ================= */}
-        {activeTab === 'doubts' && (
-          <div className="animate-fade-in" style={{ maxWidth: 940, margin: '0 auto' }}>
-            <div className="section-header">
-              <div>
-                <h1 className="section-title">
-                  <HelpCircle size={18} /> Deep Concept Doubt Solver
-                </h1>
-                <span className="section-subtitle">
-                  Ask any difficult problem, code snippet, or theoretical confusion. Gemini decomposes it into core intuition, step-by-step logic, common traps, and instant verification challenges.
-                </span>
-              </div>
-            </div>
-
-            <div className="glass-card" style={{ marginTop: 18, marginBottom: 20 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 14 }}>
-                <div className="input-group">
-                  <label className="input-label">Subject</label>
-                  <select
-                    className="select-input"
-                    value={doubtSubject}
-                    onChange={e => setDoubtSubject(e.target.value)}
-                  >
-                    <option value="Operating Systems">Operating Systems</option>
-                    <option value="Artificial Intelligence">Artificial Intelligence</option>
-                    <option value="Distributed Systems">Distributed Systems</option>
-                    <option value="Mathematics">Mathematics</option>
-                    <option value="Computer Science">Computer Science General</option>
-                  </select>
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">Target Concept (Optional)</label>
-                  <select
-                    className="select-input"
-                    value={doubtConcept}
-                    onChange={e => setDoubtConcept(e.target.value)}
-                  >
-                    <option value="">General Subject Doubt</option>
-                    {concepts.map(c => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">Difficulty Expectation</label>
-                  <select
-                    className="select-input"
-                    value={doubtDifficulty}
-                    onChange={e => setDoubtDifficulty(e.target.value)}
-                  >
-                    <option value="Easy">Beginner / Intuitive</option>
-                    <option value="Medium">Undergraduate Exam Level</option>
-                    <option value="Hard">Advanced / Rigorous</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label">Describe your doubt or paste problem statement</label>
-                <textarea
-                  className="textarea-input"
-                  rows={4}
-                  placeholder="e.g. Why does Transformer self-attention divide Query-Key dot products by sqrt(d_k)? What happens to the gradients if we omit this?"
-                  value={doubtInput}
-                  onChange={e => setDoubtInput(e.target.value)}
-                />
-              </div>
-
-              {/* Sample Doubts Quick Buttons */}
-              <div style={{ marginBottom: 16 }}>
-                <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)', display: 'block', marginBottom: 6 }}>
-                  Quick Sample Doubts:
-                </span>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {[
-                    "Why divide query-key dot product by sqrt(d_k) in Transformers?",
-                    "How does Clock page replacement approximate LRU without a linked list?",
-                    "Difference between CAP consistency vs ACID consistency?",
-                    "Why does Ebbinghaus forgetting curve decay exponentially?"
-                  ].map((preset, idx) => (
-                    <button
-                      key={idx}
-                      className="chat-suggestion-chip"
-                      onClick={() => handleSolveDoubt(preset)}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button
-                  className="btn-primary"
-                  onClick={() => handleSolveDoubt()}
-                  disabled={doubtLoading || !doubtInput.trim()}
-                  style={{ padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 6 }}
-                >
-                  {doubtLoading ? <RefreshCw size={14} className="animate-spin" /> : <HelpCircle size={14} />}
-                  {doubtLoading ? 'Analyzing Doubt with Gemini...' : 'Deconstruct & Solve Doubt'}
-                </button>
-              </div>
-            </div>
-
-            {/* Doubt Solution Card */}
-            {doubtResult && (
-              <div className="animate-fade-in doubt-grid">
-                {/* 1. Core Intuition */}
-                <div className="solution-box" style={{ borderLeft: '4px solid var(--mint-dark)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    <Lightbulb size={18} color="var(--yellow-dark)" />
-                    <h3 style={{ fontSize: 15, fontWeight: 700 }}>The Core Intuition</h3>
-                    {doubtResult.ai_powered && <span className="badge badge-easy">Gemini Verified</span>}
-                  </div>
-                  <p style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.6 }}>
-                    {doubtResult.core_intuition}
-                  </p>
-                </div>
-
-                {/* 2. Step-by-Step Logic Trace */}
-                <div className="solution-box">
-                  <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <CheckCircle2 size={15} color="var(--mint-dark)" /> Step-by-Step Logical Resolution
-                  </h4>
-                  {doubtResult.step_by_step_solution.map((step, sIdx) => (
-                    <div key={sIdx} className="step-item">
-                      <div className="step-num">{sIdx + 1}</div>
-                      <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink)' }}>{step}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* 3. Pitfalls & Retention Hook */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-                  <div className="pitfall-box">
-                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--coral-dark)' }}>
-                      <AlertTriangle size={15} /> Common Traps & Exam Pitfalls
-                    </h4>
-                    <ul style={{ paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
-                      {doubtResult.common_pitfalls.map((pitfall, pIdx) => (
-                        <li key={pIdx}>{pitfall}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="retention-hook-box">
-                    <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--mint-dark)' }}>
-                      <Sparkles size={15} /> Memory Retention Anchor
-                    </h4>
-                    <p style={{ fontSize: 12, lineHeight: 1.6, fontWeight: 600 }}>
-                      {doubtResult.retention_hook}
-                    </p>
-                  </div>
-                </div>
-
-                {/* 4. Instant Verification Challenge */}
-                {doubtResult.verification_challenge && (
-                  <div className="solution-box" style={{ background: '#fdfbf7', border: '1px solid #ebd9c5' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <h4 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Zap size={15} color="var(--yellow-dark)" /> Instant Comprehension Check
-                      </h4>
-                      <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
-                        Verify your understanding
-                      </span>
-                    </div>
-
-                    <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-                      {doubtResult.verification_challenge.question}
-                    </p>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {doubtResult.verification_challenge.options.map((opt, optIdx) => {
-                        const isCorrect = optIdx === doubtResult.verification_challenge.answer_index;
-                        const isSelected = selectedChallengeOption === optIdx;
-                        let btnStyle = { padding: '10px 14px', textAlign: 'left', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', background: '#ffffff', fontSize: 12, cursor: 'pointer' };
-                        if (selectedChallengeOption !== null) {
-                          if (isCorrect) {
-                            btnStyle = { ...btnStyle, background: 'var(--mint-bg)', borderColor: 'var(--mint)', color: 'var(--mint-dark)', fontWeight: 700 };
-                          } else if (isSelected) {
-                            btnStyle = { ...btnStyle, background: 'var(--coral-bg)', borderColor: 'var(--coral)', color: 'var(--coral-dark)' };
-                          }
-                        }
-                        return (
-                          <button
-                            key={optIdx}
-                            style={btnStyle}
-                            onClick={() => setSelectedChallengeOption(optIdx)}
-                          >
-                            <span style={{ fontWeight: 700, marginRight: 8 }}>{String.fromCharCode(65 + optIdx)}.</span>
-                            {opt}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {selectedChallengeOption !== null && (
-                      <div style={{ marginTop: 12, padding: 10, borderRadius: 'var(--radius-sm)', background: selectedChallengeOption === doubtResult.verification_challenge.answer_index ? 'var(--mint-bg)' : 'var(--coral-bg)', fontSize: 12 }}>
-                        <b>{selectedChallengeOption === doubtResult.verification_challenge.answer_index ? '✓ Exactly Right!' : '✗ Not quite:'}</b> {doubtResult.verification_challenge.explanation}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* ================= SCREEN: MNEMONIC LAB & MEMORY ANCHORS ================= */}
         {activeTab === 'mnemonics' && (
@@ -1987,9 +3029,6 @@ export default function App() {
                 <h1 className="section-title">
                   <Sparkles size={18} /> AI Memory Anchor & Mnemonic Lab
                 </h1>
-                <span className="section-subtitle">
-                  Supercharge your memory half-life (h). Convert abstract computer science theorems and algorithms into vivid narrative mnemonics and interactive active recall flashcards.
-                </span>
               </div>
             </div>
 
@@ -2150,193 +3189,739 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= SCREEN 4: MATERIALS & AI QUESTIONS ================= */}
+        {/* ================= SCREEN 4: MATERIALS & AI TUTOR (NOTEBOOKLM WORKSPACE) ================= */}
         {activeTab === 'materials' && (
-          <div className="animate-fade-in">
-            <div className="section-header">
-              <div>
-                <h1 className="section-title">
-                  <BookOpen size={18} /> Study Materials & Synthesized Questions
-                </h1>
-                <span className="section-subtitle">
-                  Upload raw lecture notes, syllabus excerpts, or textbooks to extract HLR concepts and Gemini AI questions.
-                </span>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 2fr', gap: 20, marginTop: 18 }}>
-              {/* Left Column: Upload Form */}
-              <div className="glass-card" style={{ height: 'fit-content' }}>
-                <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <Upload size={15} color="var(--mint-dark)" /> Ingest New Material
-                </h3>
-
-                {uploadSuccess && (
-                  <div style={{ padding: '9px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--mint-bg)', border: '1px solid #c2e2cf', color: 'var(--mint-dark)', fontSize: 12, marginBottom: 14 }}>
-                    ✓ Concept extracted & synthesized questions added to review queue!
-                  </div>
-                )}
-
-                <form onSubmit={handleMaterialSubmit}>
-                  <div className="input-group">
-                    <label className="input-label">Subject</label>
-                    <select
-                      className="select-input"
-                      value={materialForm.subject}
-                      onChange={e => setMaterialForm({ ...materialForm, subject: e.target.value })}
-                    >
-                      <option value="Artificial Intelligence">Artificial Intelligence</option>
-                      <option value="Operating Systems">Operating Systems</option>
-                      <option value="Mathematics">Mathematics</option>
-                      <option value="Distributed Systems">Distributed Systems</option>
-                    </select>
+          <div className="animate-fade-in materials-ai-container">
+            {/* 3-Column Grid: Left NotebookLM Sources Sidebar + Center Chatbot + Right Quiz Tile */}
+            <div className="materials-ai-grid">
+              {/* ================= LEFT COLUMN: NOTEBOOKLM SOURCES SIDEBAR ================= */}
+              <div className="notebooklm-sidebar">
+                {/* Sidebar Header: Subject Switcher */}
+                <div className="notebooklm-sidebar-header">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Database size={15} color="var(--mint-dark)" />
+                      <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>Study Sources</span>
+                    </div>
+                    <span className="badge badge-medium" style={{ fontSize: 10 }}>
+                      {subjectMaterials.length} Reference{subjectMaterials.length !== 1 ? 's' : ''}
+                    </span>
                   </div>
 
-                  <div className="input-group">
-                    <label className="input-label">Topic Area</label>
-                    <input
-                      type="text"
-                      className="text-input"
-                      placeholder="e.g. Distributed Consensus"
-                      value={materialForm.topic}
-                      onChange={e => setMaterialForm({ ...materialForm, topic: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Concept Title</label>
-                    <input
-                      type="text"
-                      className="text-input"
-                      placeholder="e.g. Raft Log Compaction"
-                      value={materialForm.title}
-                      onChange={e => setMaterialForm({ ...materialForm, title: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Notes Content (Text or Syllabus)</label>
-                    <textarea
-                      rows={5}
-                      className="textarea-input"
-                      placeholder="Paste your lecture notes, summaries, or slides..."
-                      value={materialForm.content}
-                      onChange={e => setMaterialForm({ ...materialForm, content: e.target.value })}
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="btn-primary"
-                    disabled={uploading}
-                    style={{ width: '100%', padding: '10px' }}
-                  >
-                    {uploading ? (
-                      <>Synthesizing AI Questions...</>
-                    ) : (
-                      <><Sparkles size={14} /> Process & Generate Questions</>
-                    )}
-                  </button>
-                </form>
-              </div>
-
-              {/* Right Column: Question Review Queue */}
-              <div>
-                <div className="glass-card" style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-                    <div>
-                      <h3 style={{ fontSize: 15, fontWeight: 700 }}>Question Review & Moderation</h3>
-                      <p style={{ fontSize: 12, color: 'var(--muted)' }}>
-                        Quality questions protect the HLR model parameter signal. Approve or flag generated items.
-                      </p>
+                  {/* Subject Selection & Addition: Listed on the left as buttons */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase' }}>
+                        Subjects
+                      </label>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        style={{ padding: '3px 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                        onClick={() => setShowAddSubjectInput(prev => !prev)}
+                        title="Add a new subject to study and upload materials for"
+                      >
+                        <Plus size={12} /> Add Subject
+                      </button>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {['all', 'approved', 'draft', 'flagged'].map(filter => (
+                    {/* Inline Add Subject Form */}
+                    {showAddSubjectInput && (
+                      <form
+                        onSubmit={e => {
+                          e.preventDefault();
+                          handleAddNewSubject();
+                        }}
+                        style={{ display: 'flex', gap: 6, background: '#ffffff', padding: 6, borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}
+                      >
+                        <input
+                          type="text"
+                          className="text-input"
+                          placeholder="Subject name..."
+                          autoFocus
+                          value={newSubjectName}
+                          onChange={e => setNewSubjectName(e.target.value)}
+                          style={{ flex: 1, padding: '4px 8px', fontSize: 11 }}
+                        />
                         <button
-                          key={filter}
-                          className={`nav-tab-btn ${questionFilter === filter ? 'active' : ''}`}
-                          onClick={() => setQuestionFilter(filter)}
-                          style={{ padding: '5px 10px', fontSize: 11 }}
+                          type="submit"
+                          className="btn-primary btn-sm"
+                          style={{ padding: '4px 10px', fontSize: 11 }}
+                          disabled={!newSubjectName.trim()}
                         >
-                          {filter.toUpperCase()}
+                          Add
                         </button>
-                      ))}
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          onClick={() => {
+                            setShowAddSubjectInput(false);
+                            setNewSubjectName('');
+                          }}
+                          style={{ padding: '4px 6px' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </form>
+                    )}
+
+                    {/* Subjects List as Interactive Buttons */}
+                    <div className="sidebar-subjects-list" style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+                      {subjectsList.map(subj => {
+                        const isSelected = chatSubject.toLowerCase() === subj.toLowerCase();
+                        const refCount = uploadedMaterials.filter(m => m.subject.toLowerCase() === subj.toLowerCase()).length;
+                        return (
+                          <button
+                            key={subj}
+                            type="button"
+                            className={`subject-nav-btn ${isSelected ? 'active' : ''}`}
+                            onClick={() => setChatSubject(subj)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '7px 10px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: isSelected ? '1px solid var(--mint-dark)' : '1px solid var(--line)',
+                              background: isSelected ? 'var(--mint-bg)' : '#ffffff',
+                              color: isSelected ? 'var(--mint-dark)' : 'var(--ink)',
+                              fontWeight: isSelected ? 800 : 600,
+                              fontSize: 12,
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {subj}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontFamily: 'var(--font-mono)',
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                                background: isSelected ? 'var(--mint-dark)' : '#f0ede6',
+                                color: isSelected ? '#ffffff' : 'var(--muted)',
+                                fontWeight: 700
+                              }}
+                            >
+                              {refCount}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      {/* All Subjects Button */}
+                      <button
+                        type="button"
+                        className={`subject-nav-btn ${chatSubject === 'All' ? 'active' : ''}`}
+                        onClick={() => setChatSubject('All')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: chatSubject === 'All' ? '1px solid var(--mint-dark)' : '1px dashed var(--line)',
+                          background: chatSubject === 'All' ? 'var(--mint-bg)' : 'transparent',
+                          color: chatSubject === 'All' ? 'var(--mint-dark)' : 'var(--muted)',
+                          fontWeight: chatSubject === 'All' ? 800 : 500,
+                          fontSize: 11,
+                          textAlign: 'left',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <span>All Subjects (Combined)</span>
+                        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+                          {uploadedMaterials.length}
+                        </span>
+                      </button>
                     </div>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {filteredQuestions.map(q => (
-                    <div key={q.id} className="glass-card">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                          <span className="badge badge-medium">{q.concept_name}</span>
-                          <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>{q.subject}</span>
-                        </div>
-                        <div>
-                          {q.status === 'approved' && (
-                            <span className="badge badge-easy"><Check size={11} /> Approved</span>
-                          )}
-                          {q.status === 'draft' && (
-                            <span className="badge badge-medium">Draft</span>
-                          )}
-                          {q.status === 'flagged' && (
-                            <span className="badge badge-due"><Flag size={11} /> Flagged</span>
-                          )}
-                        </div>
+                {/* Sidebar Content (Scrollable): Upload Materials Box + Sources List */}
+                <div className="notebooklm-sidebar-content">
+                  {/* Dedicated "Upload Materials" Box */}
+                  <div className="sidebar-upload-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--ink)' }}>
+                        <Upload size={13} color="var(--mint-dark)" /> Upload Materials
+                      </span>
+                      <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                        PDF • DOCX • PPTX • TXT
+                      </span>
+                    </div>
+
+                    {sidebarUploadSuccess && (
+                      <div style={{ padding: '6px 10px', background: 'var(--mint-bg)', border: '1px solid #c2e2cf', borderRadius: 'var(--radius-sm)', color: 'var(--mint-dark)', fontSize: 11, fontWeight: 600 }}>
+                        ✓ Source added & referenced by chatbot!
                       </div>
+                    )}
 
-                      <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 14 }}>
-                        {q.text}
-                      </p>
+                    {/* Textarea for pasting notes or text */}
+                    <textarea
+                      className="textarea-input"
+                      rows={2}
+                      style={{ padding: '8px 10px', fontSize: 11, resize: 'vertical' }}
+                      placeholder="Paste syllabus, textbook excerpt, or notes here..."
+                      value={sidebarUploadContent}
+                      onChange={e => setSidebarUploadContent(e.target.value)}
+                    />
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
-                        {q.options.map((opt, oIdx) => (
-                          <div
-                            key={oIdx}
-                            style={{
-                              padding: '8px 12px',
-                              borderRadius: 'var(--radius-sm)',
-                              background: oIdx === q.answer_index ? 'var(--mint-bg)' : '#ffffff',
-                              border: oIdx === q.answer_index ? '1px solid #c2e2cf' : '1px solid var(--line)',
-                              fontSize: 12,
-                              color: oIdx === q.answer_index ? 'var(--mint-dark)' : 'var(--ink)',
-                              fontWeight: oIdx === q.answer_index ? 600 : 400
-                            }}
-                          >
-                            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, marginRight: 6 }}>
-                              {['A', 'B', 'C', 'D'][oIdx]}:
-                            </span>
-                            {opt}
+                    {/* Drag & Drop File Zone */}
+                    <div
+                      className={`sidebar-drop-zone ${sidebarDragging ? 'drag-active' : ''}`}
+                      onClick={() => sidebarFileInputRef.current?.click()}
+                      onDragOver={e => { e.preventDefault(); setSidebarDragging(true); }}
+                      onDragLeave={e => { e.preventDefault(); setSidebarDragging(false); }}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setSidebarDragging(false);
+                        if (e.dataTransfer?.files?.[0]) {
+                          handleSidebarProcessFile(e.dataTransfer.files[0]);
+                        }
+                      }}
+                    >
+                      <input
+                        ref={sidebarFileInputRef}
+                        type="file"
+                        accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.json"
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          if (e.target.files?.[0]) {
+                            handleSidebarProcessFile(e.target.files[0]);
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                      {sidebarExtracting ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--mint-dark)', fontSize: 11 }}>
+                          <RefreshCw size={13} className="animate-spin" /> Extracting document text...
+                        </div>
+                      ) : (
+                        <>
+                          <FileUp size={16} color="var(--mint-dark)" />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink)' }}>
+                            Attach PDF, DOCX, or PPT file
+                          </span>
+                          <span style={{ fontSize: 10, color: 'var(--muted)' }}>
+                            Click to browse or drop file here
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Staged File Preview Chips */}
+                    {sidebarStagedFiles.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {sidebarStagedFiles.map(f => (
+                          <div key={f.id} className="staged-chip" style={{ width: '100%', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                              <span className={`file-type-badge ${f.fileType}`}>{f.fileType}</span>
+                              <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+                                {f.name}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="staged-chip-remove"
+                              onClick={() => setSidebarStagedFiles(prev => prev.filter(x => x.id !== f.id))}
+                            >
+                              <X size={12} />
+                            </button>
                           </div>
                         ))}
                       </div>
+                    )}
 
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-                        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
-                          ID: {q.id}
+                    {/* Submit Ingestion Button */}
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: '100%', padding: '8px', fontSize: 12, justifyContent: 'center' }}
+                      disabled={sidebarUploading || sidebarExtracting || (!sidebarUploadContent.trim() && sidebarStagedFiles.length === 0)}
+                      onClick={handleSidebarUploadSubmit}
+                    >
+                      {sidebarUploading ? (
+                        <><RefreshCw size={12} className="animate-spin" /> Adding Source...</>
+                      ) : (
+                        <><Sparkles size={12} /> Add to Sources & Ground AI</>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Sources List (NotebookLM Style) */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase' }}>
+                        Referenced Sources ({subjectMaterials.length})
+                      </span>
+                      <span style={{ fontSize: 10, color: 'var(--mint-dark)', fontWeight: 600 }}>
+                        ✓ All Active
+                      </span>
+                    </div>
+
+                    {subjectMaterials.length === 0 ? (
+                      <div style={{ padding: '16px 10px', textAlign: 'center', color: 'var(--muted)', fontSize: 12, border: '1px dashed var(--line)', borderRadius: 'var(--radius-sm)' }}>
+                        No sources uploaded for {chatSubject} yet. Upload a PDF, DOCX, or notes above!
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {subjectMaterials.map(mat => {
+                          let badgeType = 'text';
+                          const lower = (mat.title || '').toLowerCase();
+                          if (lower.endsWith('.pdf') || lower.includes('pdf')) badgeType = 'pdf';
+                          else if (lower.endsWith('.docx') || lower.includes('docx') || lower.includes('word')) badgeType = 'docx';
+                          else if (lower.endsWith('.pptx') || lower.endsWith('.ppt') || lower.includes('slides') || lower.includes('ppt')) badgeType = 'pptx';
+
+                          return (
+                            <div key={mat.id} className="sidebar-source-item">
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                                  <span className={`file-type-badge ${badgeType}`}>{badgeType}</span>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {mat.title}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary btn-sm"
+                                    style={{ padding: '2px 5px', fontSize: 10 }}
+                                    title="Preview full source content"
+                                    onClick={() => setSelectedSourcePreview(mat)}
+                                  >
+                                    View
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="staged-chip-remove"
+                                    title="Remove source"
+                                    onClick={() => handleDeleteMaterial(mat.id)}
+                                  >
+                                    <Trash2 size={12} color="var(--muted)" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <p style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.4, margin: 0, maxHeight: 32, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {mat.content}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ================= CENTER COLUMN: THE CHATBOT ================= */}
+              <div className="materials-chat-window">
+                {/* Chatbot Header */}
+                <div className="chat-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--mint-bg)', border: '1px solid var(--mint)', display: 'grid', placeItems: 'center', color: 'var(--mint-dark)' }}>
+                      <Bot size={18} />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                        Subject Doubt Solver
+                        <span className="badge badge-easy" style={{ fontSize: 10 }}>
+                          {isApiOnline ? 'Gemini 2.0' : 'Local HLR'}
                         </span>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button
-                            className="btn-danger btn-sm"
-                            onClick={() => handleQuestionStatus(q.id, 'flagged')}
-                          >
-                            <Flag size={12} /> Flag
-                          </button>
-                          <button
-                            className="btn-success btn-sm"
-                            onClick={() => handleQuestionStatus(q.id, 'approved')}
-                          >
-                            <Check size={12} /> Approve
-                          </button>
+                      </h3>
+                    </div>
+                  </div>
+
+                  {/* Persona Selector & Reset */}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="persona-selector">
+                      <button
+                        className={`persona-pill ${chatPersona === 'socratic' ? 'active' : ''}`}
+                        onClick={() => setChatPersona('socratic')}
+                        title="Active recall tutor that asks guiding questions"
+                      >
+                        🧠 Socratic
+                      </button>
+                      <button
+                        className={`persona-pill ${chatPersona === 'exam_prep' ? 'active' : ''}`}
+                        onClick={() => setChatPersona('exam_prep')}
+                        title="High-yield exam summaries and edge-cases"
+                      >
+                        🎯 Exam Prep
+                      </button>
+                      <button
+                        className={`persona-pill ${chatPersona === 'eli5' ? 'active' : ''}`}
+                        onClick={() => setChatPersona('eli5')}
+                        title="Simple analogies with zero jargon"
+                      >
+                        💡 ELI5
+                      </button>
+                    </div>
+
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => setChatMessages([createDefaultConceptsMessage(chatSubject, concepts, uploadedMaterials)])}
+                      title="Reset chat to default main concepts view"
+                    >
+                      <RotateCcw size={12} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Grounding Info Banner */}
+                <div style={{ padding: '7px 14px', background: '#f5f9f6', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--mint-dark)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <FileCheck size={13} />
+                    <span>Active Sources: <b>{subjectMaterials[0]?.title || `${chatSubject} Notes`}</b> ({subjectMaterials.length} files)</span>
+                  </div>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--muted)' }}>
+                    Referenced in all answers
+                  </span>
+                </div>
+
+                {/* Chat Feed */}
+                <div className="chat-feed" style={{ flex: 1, overflowY: 'auto' }}>
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={`chat-msg-row ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                      <div className={`chat-avatar ${msg.role === 'user' ? 'user-av' : 'ai-av'}`}>
+                        {msg.role === 'user' ? 'U' : <Bot size={15} />}
+                      </div>
+                      <div style={{ maxWidth: '85%' }}>
+                        <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                          <RenderFormattedChatMessage content={msg.content} />
                         </div>
+
+                        <div className="chat-meta">
+                          <span>{msg.timestamp}</span>
+                          {msg.aiPowered && <span style={{ color: 'var(--mint-dark)' }}>• Gemini Grounded</span>}
+                          {msg.cited_materials && msg.cited_materials.length > 0 && (
+                            <span style={{ color: 'var(--mint-dark)', background: 'var(--mint-bg)', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>
+                              📚 Ref: {msg.cited_materials.join(', ')}
+                            </span>
+                          )}
+                        </div>
+
+                        {msg.followups && msg.followups.length > 0 && (
+                          <div className="chat-chip-container">
+                            {msg.followups.map((chip, cIdx) => (
+                              <button
+                                key={cIdx}
+                                className="chat-suggestion-chip"
+                                onClick={() => handleSendChatMessage(chip)}
+                              >
+                                ↳ {chip}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
+
+                  {chatLoading && (
+                    <div className="chat-msg-row ai">
+                      <div className="chat-avatar ai-av">
+                        <Bot size={15} />
+                      </div>
+                      <div className="chat-bubble ai" style={{ color: 'var(--muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <RefreshCw size={13} className="animate-spin" /> Cross-referencing {chatSubject} sources & analyzing doubt...
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* WhatsApp / ChatGPT Style File Upload & Paste Window */}
+                <div
+                  className="modern-upload-paste-container"
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  {/* Drag & Drop Overlay */}
+                  {isDragging && (
+                    <div className="drop-overlay">
+                      <FileUp size={28} />
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>Drop PDF, DOCX, or PPT File to Attach</span>
+                      <span style={{ fontSize: 11, opacity: 0.85 }}>Text will be extracted automatically</span>
+                    </div>
+                  )}
+
+                  {/* Staged File Attachments Bar */}
+                  {stagedFiles.length > 0 && (
+                    <div className="staged-files-list">
+                      {stagedFiles.map(file => (
+                        <div key={file.id} className="staged-chip">
+                          <FileText size={14} color="var(--mint-dark)" />
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ fontWeight: 600, maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file.name}
+                            </span>
+                            <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                              {file.size} {file.pageCount > 1 ? `• ${file.pageCount} pages` : ''}
+                            </span>
+                          </div>
+                          {file.status === 'extracting' ? (
+                            <RefreshCw size={12} className="animate-spin" color="var(--mint-dark)" />
+                          ) : (
+                            <FileCheck size={12} color="var(--mint-dark)" />
+                          )}
+                          <button
+                            type="button"
+                            className="staged-chip-remove"
+                            title="Remove attachment"
+                            onClick={() => setStagedFiles(prev => prev.filter(f => f.id !== file.id))}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Unified Prompt Input Textbox: Pin at left, Textarea in middle, Ask Doubt icon at right */}
+                  <div className="input-actions-bar">
+                    {/* Hidden File Input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.json"
+                      style={{ display: 'none' }}
+                      onChange={e => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleProcessFile(e.target.files[0]);
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+
+                    {/* Pin / Paperclip Icon Button at Left End */}
+                    <button
+                      type="button"
+                      className="attach-btn"
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Attach PDF, DOCX, or PPT file (or drag & drop anywhere here)"
+                      disabled={extractingFile}
+                    >
+                      {extractingFile ? <RefreshCw size={15} className="animate-spin" /> : <Paperclip size={16} />}
+                    </button>
+
+                    {/* Textarea */}
+                    <textarea
+                      className="auto-expand-textarea"
+                      rows={1}
+                      placeholder={`Ask a doubt in ${chatSubject}, paste notes (Ctrl+V), or attach PDFs/DOCX/PPT...`}
+                      value={chatInput}
+                      disabled={chatLoading}
+                      onChange={e => setChatInput(e.target.value)}
+                      onPaste={handlePaste}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendChatMessage();
+                        }
+                      }}
+                    />
+
+                    {/* Quick Save to Materials Button if file or notes staged */}
+                    {(stagedFiles.length > 0 || chatInput.trim().length > 30) && (
+                      <button
+                        type="button"
+                        className="ingest-btn-pill"
+                        onClick={() => handleIngestStagedMaterial()}
+                        disabled={uploading}
+                        title="Save this material to your permanent subject library and synthesize quiz questions"
+                      >
+                        <Sparkles size={11} />
+                        {uploading ? 'Ingesting...' : 'Ingest'}
+                      </button>
+                    )}
+
+                    {/* Ask Doubt Icon-Only Button at Right End */}
+                    <button
+                      type="button"
+                      className="send-btn"
+                      onClick={() => handleSendChatMessage()}
+                      disabled={chatLoading || (!chatInput.trim() && stagedFiles.length === 0)}
+                      title="Ask Doubt"
+                    >
+                      <Send size={15} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* ================= RIGHT COLUMN: QUIZ SECTION TILE ================= */}
+              <div className="quiz-tile-column">
+                <div
+                  className="quiz-tile-card"
+                  onClick={() => setShowQuizConfirm(true)}
+                  title="Click to launch active recall quiz for this subject"
+                >
+                  <div className="quiz-tile-header">
+                    <span className="badge badge-due" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <Zap size={11} /> Active Recall Mode
+                    </span>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--mint-dark)', fontWeight: 700 }}>
+                      HLR v2.0
+                    </span>
+                  </div>
+
+                  <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--ink)', marginBottom: 4 }}>
+                    {chatSubject === 'All' ? 'All Subjects' : chatSubject} Quiz
+                  </h3>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12, lineHeight: 1.5 }}>
+                    Test your understanding with questions synthesized directly from your uploaded materials.
+                  </p>
+
+                  {/* Recall & Due Metric Box */}
+                  <div className="quiz-tile-metric-box">
+                    <div>
+                      <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--muted)', textTransform: 'uppercase' }}>
+                        Recall Probability
+                      </span>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: subjectRecall <= 70 ? 'var(--coral)' : 'var(--mint-dark)' }}>
+                        {subjectRecall}%
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--muted)', textTransform: 'uppercase' }}>
+                        Due Concepts
+                      </span>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--ink)' }}>
+                        {subjectDueCount} <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400 }}>/ {subjectConcepts.length}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Target Concept Previews */}
+                  <div style={{ marginBottom: 14 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink)', display: 'block', marginBottom: 6 }}>
+                      Target Concepts:
+                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {subjectConcepts.slice(0, 3).map((c, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', background: '#f8f6f0', borderRadius: 'var(--radius-sm)', fontSize: 11 }}>
+                          <span style={{ fontWeight: 600, color: 'var(--ink)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.name}
+                          </span>
+                          <span style={{ fontFamily: 'var(--font-mono)', color: c.p_hat <= 0.70 ? 'var(--coral)' : 'var(--mint-dark)' }}>
+                            {(c.p_hat * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Launch Quiz Action Button */}
+                  <button
+                    type="button"
+                    className="quiz-tile-action-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowQuizConfirm(true);
+                    }}
+                  >
+                    <Play size={14} /> Launch Quiz Session →
+                  </button>
                 </div>
               </div>
             </div>
+
+            {/* ================= QUIZ CONFIRMATION MODAL ================= */}
+            {showQuizConfirm && (
+              <div className="modal-overlay" onClick={() => setShowQuizConfirm(false)}>
+                <div className="confirm-modal-card" onClick={e => e.stopPropagation()}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                    <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--yellow-bg)', display: 'grid', placeItems: 'center', color: 'var(--yellow-dark)' }}>
+                      <Zap size={24} />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: 17, fontWeight: 800 }}>
+                        Confirm Quiz Session
+                      </h3>
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        {chatSubject === 'All' ? 'Comprehensive Review' : `${chatSubject} Focus`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.6, marginBottom: 14 }}>
+                    You are about to start an active recall quiz session. Questions are dynamically generated from your uploaded notes and materials for <b>{chatSubject}</b>.
+                  </p>
+
+                  <div style={{ background: '#f8f6f0', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted)', marginBottom: 6 }}>
+                      Target Concepts in this Session:
+                    </div>
+                    <ul style={{ paddingLeft: 18, fontSize: 12, lineHeight: 1.5, color: 'var(--ink)' }}>
+                      {subjectConcepts.slice(0, 4).map((c, i) => (
+                        <li key={i}><b>{c.name}</b> (recall estimate: {(c.p_hat * 100).toFixed(0)}%)</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Sparkles size={13} color="var(--mint-dark)" />
+                    Settles & Meeder HLR will calibrate memory half-life based on your response time & correctness.
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => setShowQuizConfirm(false)}
+                      style={{ padding: '9px 18px' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn-primary"
+                      onClick={() => {
+                        setShowQuizConfirm(false);
+                        startQuizSession(chatSubject === 'All' ? null : chatSubject);
+                      }}
+                      style={{ padding: '9px 22px', display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <Play size={13} /> Confirm & Launch Quiz
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= SOURCE DOCUMENT PREVIEW MODAL ================= */}
+            {selectedSourcePreview && (
+              <div className="modal-overlay" onClick={() => setSelectedSourcePreview(null)}>
+                <div className="confirm-modal-card" style={{ maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                    <h3 style={{ fontSize: 16, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <FileText size={16} color="var(--mint-dark)" /> {selectedSourcePreview.title}
+                    </h3>
+                    <button className="btn-secondary btn-sm" onClick={() => setSelectedSourcePreview(null)}>
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                    <span className="badge badge-medium">{selectedSourcePreview.subject}</span>
+                    <span className="badge badge-easy">✓ Active Source Context</span>
+                  </div>
+
+                  <div style={{ overflowY: 'auto', flex: 1, padding: 12, background: '#f8f6f0', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--ink)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                    {selectedSourcePreview.content}
+                  </div>
+
+                  <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button className="btn-primary btn-sm" onClick={() => setSelectedSourcePreview(null)}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2348,9 +3933,6 @@ export default function App() {
                 <h1 className="section-title">
                   <LineChart size={18} /> Concept Detail & Forgetting Curve
                 </h1>
-                <span className="section-subtitle">
-                  Empirical half-life model visualization based on Settles & Meeder (2016) Figure 4.
-                </span>
               </div>
               <div>
                 <select
@@ -2796,34 +4378,15 @@ export default function App() {
                 <h1 className="section-title">
                   <Settings size={18} /> Planner Settings & HLR Model Engine
                 </h1>
-                <span className="section-subtitle">
-                  Configure study preferences, exam deadlines, and inspect machine learning model versions.
-                </span>
               </div>
             </div>
 
             <div className="glass-card" style={{ marginTop: 20, marginBottom: 20 }}>
               <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>
-                Study Time & Target Retention
+                Target Retention Threshold
               </h3>
 
               <div className="input-group">
-                <label className="input-label">Daily Study Time Budget</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {[15, 30, 45, 60, 90].map(mins => (
-                    <button
-                      key={mins}
-                      className={`btn-secondary ${settings.daily_minutes === mins ? 'btn-primary' : ''}`}
-                      onClick={() => setSettings({ ...settings, daily_minutes: mins })}
-                      style={{ flex: 1 }}
-                    >
-                      {mins} mins
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="input-group" style={{ marginTop: 16 }}>
                 <label className="input-label">
                   Target Retention Threshold: <b>{Math.round(settings.retention_threshold * 100)}%</b>
                 </label>

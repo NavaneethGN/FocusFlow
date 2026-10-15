@@ -25,14 +25,31 @@ async def get_ai_status():
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
-    """Interactive multi-turn conversation with Socratic or Exam personas."""
+    """Interactive multi-turn conversation and doubt clearing with Socratic or Exam personas."""
     history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
+
+    # Gather materials context for the specified subject
+    mats_text = req.materials_context or ""
+    if not mats_text:
+        try:
+            import main
+            matching = [
+                f"### Material: {m.get('title', 'Study Notes')}\n{m.get('content', '')}"
+                for m in getattr(main, "db_materials", [])
+                if not req.subject or req.subject.lower() == "all" or m.get("subject", "").lower() == req.subject.lower()
+            ]
+            if matching:
+                mats_text = "\n\n".join(matching)
+        except Exception:
+            pass
+
     return await chat_with_gemini(
         message=req.message,
         history=history_dicts,
         subject=req.subject,
         persona=req.persona,
         concept_context=req.concept_context,
+        materials_context=mats_text or None,
     )
 
 

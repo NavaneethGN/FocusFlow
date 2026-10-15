@@ -65,7 +65,7 @@ def get_concepts(subject_id: int | None = None, user_id: int = 1, db: Session = 
 
 @router.get("/{concept_id}/curve", response_model=ConceptCurveResponse)
 def get_concept_curve(concept_id: str, user_id: int = 1, db: Session = Depends(get_db)):
-    c_id = int(concept_id) if concept_id.isdigit() else 1
+    c_id = int(concept_id) if str(concept_id).isdigit() else 1
     concept = db.query(Concept).filter(Concept.id == c_id).first()
     if not concept:
         concept = db.query(Concept).first()

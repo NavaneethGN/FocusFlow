@@ -219,3 +219,167 @@ def test_ai_mnemonics_endpoint(client):
     assert "flashcards" in data
     assert len(data["flashcards"]) >= 1
 
+
+def test_extract_file_docx(client):
+    import io
+    import docx
+    
+    doc = docx.Document()
+    doc.add_heading("Operating Systems Virtual Memory", level=1)
+    doc.add_paragraph("Paging and segmentation are the core memory virtualization techniques.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    
+    files = {"file": ("virtual_memory.docx", buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    res = client.post("/api/materials/extract-file", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["filename"] == "virtual_memory.docx"
+    assert "Paging and segmentation" in data["text"]
+    assert data["file_type"] == "docx"
+
+
+def test_extract_file_pptx(client):
+    import io
+    import pptx
+    
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    slide.shapes.title.text = "Distributed Systems Slide"
+    slide.placeholders[1].text = "CAP Theorem dictates trade-offs between consistency and availability."
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    
+    files = {"file": ("dist_systems.pptx", buf, "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
+    res = client.post("/api/materials/extract-file", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["filename"] == "dist_systems.pptx"
+    assert "CAP Theorem" in data["text"]
+    assert data["file_type"] == "pptx"
+
+
+def test_extract_file_txt(client):
+    import io
+    buf = io.BytesIO(b"Deadlock avoidance requires Banker's algorithm and resource ordering.")
+    files = {"file": ("deadlocks.txt", buf, "text/plain")}
+    res = client.post("/api/materials/extract-file", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["filename"] == "deadlocks.txt"
+    assert "Banker's algorithm" in data["text"]
+    assert data["file_type"] == "text"
+
+
+def test_materials_subject_filter(client):
+    res = client.get("/api/materials?subject=Operating%20Systems")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    for mat in data:
+        assert mat["subject"].lower() == "operating systems"
+
+
+def test_plan_tiles_exact_timestamps_and_topics(client):
+    res = client.get("/api/plan/today")
+    assert res.status_code == 200
+    data = res.json()
+    assert "tiles" in data
+    assert len(data["tiles"]) >= 1
+
+    first_tile = data["tiles"][0]
+    # Verify exact timestamps on each tile
+    assert "time_slot" in first_tile
+    assert " - " in first_tile["time_slot"]
+    assert "AM" in first_tile["time_slot"] or "PM" in first_tile["time_slot"]
+    assert "start_time" in first_tile
+    assert "end_time" in first_tile
+    
+    # Verify subject and weak topic mapping
+    assert "subject" in first_tile
+    assert "recommended_topic" in first_tile
+    assert first_tile["recommended_topic"].startswith("Recommended Topic: ")
+    assert "productivity_tier" in first_tile
+    assert "mode_tier" in first_tile
+    assert first_tile["mode_tier"] == "AI-Optimized"
+
+
+def test_plan_schedule_free_time_windows_slicing(client):
+    # Free-time window: 07:00 to 08:30 (90 mins). User selects session duration: 30 mins (Manual mode).
+    # Expected: Exactly 3 uniform sliced session tiles, no micro-intervals.
+    payload = {
+        "mode": "manual",
+        "session_duration": 30,
+        "free_time_windows": [
+            {"id": "win-morning", "start": "07:00", "end": "08:30", "label": "Morning Study"}
+        ]
+    }
+    res = client.post("/api/plan/schedule", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["session_duration"] == 30
+    assert len(data["tiles"]) == 3
+    assert data["tiles"][0]["time_slot"] == "07:00 AM - 07:30 AM"
+    assert data["tiles"][1]["time_slot"] == "07:30 AM - 08:00 AM"
+    assert data["tiles"][2]["time_slot"] == "08:00 AM - 08:30 AM"
+    for tile in data["tiles"]:
+        assert tile["duration_minutes"] == 30
+        assert tile["recommended_topic"].startswith("Recommended Topic: ")
+        assert "🧠 Cognitive Peak" in tile["productivity_tier"]
+
+
+def test_plan_schedule_ai_session_length_optimization(client):
+    # AI Mode for session length: User provides initial duration anchor (e.g. 45m).
+    # System analyzes quiz data and tunes towards optimal duration for retention (20m due to decay).
+    payload = {
+        "mode": "ai_optimized",
+        "session_length_mode": "ai_optimized",
+        "initial_session_duration": 45,
+        "free_time_windows": [
+            {"id": "win-morning", "start": "07:00", "end": "08:00", "label": "Morning Focus"}
+        ]
+    }
+    res = client.post("/api/plan/schedule", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["session_length_mode"] == "ai_optimized"
+    assert data["initial_session_duration"] == 45
+    assert data["optimal_session_duration"] in (20, 30, 45)
+    assert "ai_duration_optimization" in data
+    assert data["ai_duration_optimization"]["mode"] == "ai_optimized"
+    assert "reason" in data["ai_duration_optimization"]
+    # Verify formatted time slot
+    assert "time_slot_formatted" in data["tiles"][0]
+    assert "to" in data["tiles"][0]["time_slot_formatted"]
+
+
+def test_plan_schedule_manual_mode(client):
+    # Manual mode with user-dictated slots
+    payload = {
+        "mode": "manual",
+        "session_duration": 45,
+        "custom_slots": [
+            {
+                "start_time": "09:00 PM",
+                "end_time": "09:45 PM",
+                "subject": "Distributed Systems",
+                "target_topic": "Raft Leader Election",
+                "productivity_tier": "🌙 Night Review"
+            }
+        ]
+    }
+    res = client.post("/api/plan/schedule", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["mode"] == "manual"
+    assert len(data["tiles"]) == 1
+    tile = data["tiles"][0]
+    assert tile["time_slot"] == "09:00 PM - 09:45 PM"
+    assert tile["subject"] == "Distributed Systems"
+    assert "Raft Leader Election" in tile["recommended_topic"]
+    assert tile["mode_tier"] == "Manual"
+
+
+

@@ -169,6 +169,40 @@ class DailyPlan(BaseModel):
     concepts: list[PlanConceptItem]
 
 
+class ScheduleTileItem(BaseModel):
+    id: str
+    time_slot: str  # e.g. "07:30 AM - 08:00 AM"
+    time_slot_formatted: str | None = None  # e.g. "7:30 am to 8:00 am"
+    start_time: str
+    end_time: str
+    duration_minutes: int
+    subject: str
+    subject_color: str | None = None
+    target_topic: str | None = None
+    recommended_topic: str
+    target_weak_topic: str | None = None
+    target_concept_id: str | int | None = None
+    target_concept: dict[str, Any] | None = None
+    productivity_tier: str
+    cognitive_tier: str | None = None
+    mode_tier: str
+    urgency_reason: str | None = None
+    decay_p: float | None = None
+    estimated_questions: int = 5
+    status: str = "ready"
+    is_completed: bool = False
+
+
+class SchedulePlanRequest(BaseModel):
+    mode: str = "ai_optimized"  # backward compatibility
+    session_length_mode: str | None = "ai_optimized"  # "manual" | "ai_optimized"
+    initial_session_duration: int | None = 30
+    session_duration: int = 30  # 20 | 30 | 45
+    anchor_time: str = "07:30 AM"
+    free_time_windows: list[dict[str, Any]] = Field(default_factory=list)
+    custom_slots: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class PlanResponse(BaseModel):
     generated_at: datetime
     daily_budget_minutes: int
@@ -178,6 +212,17 @@ class PlanResponse(BaseModel):
     total_scheduled_minutes: int | None = None
     due_concepts_total: int | None = None
     blocks: list[Any] | None = None
+    tiles: list[ScheduleTileItem] | None = None
+    mode: str | None = "ai_optimized"
+    session_length_mode: str | None = "ai_optimized"
+    initial_session_duration: int | None = 30
+    optimal_session_duration: int | None = 30
+    ai_duration_optimization: dict[str, Any] | None = None
+    session_duration: int | None = 30
+    anchor_time: str | None = "07:30 AM"
+    free_time_windows: list[dict[str, Any]] | None = None
+    scheduler_algorithm: str | None = None
+
 
 
 # --- Curve Visualization ---
@@ -233,6 +278,7 @@ class ChatRequest(BaseModel):
     subject: str | None = None
     persona: Literal["socratic", "exam_prep", "eli5"] = "socratic"
     concept_context: str | None = None
+    materials_context: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -241,6 +287,7 @@ class ChatResponse(BaseModel):
     ai_powered: bool
     model: str
     suggested_followups: list[str] = Field(default_factory=list)
+    cited_materials: list[str] = Field(default_factory=list)
 
 
 class DoubtSolveRequest(BaseModel):
