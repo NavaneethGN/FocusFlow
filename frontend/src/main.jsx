@@ -592,8 +592,11 @@ export default function App() {
   const [scheduleSuccessMsg, setScheduleSuccessMsg] = useState(false);
   const [scheduleSeed, setScheduleSeed] = useState(0);
 
-  async function handleRecreateSchedule(overrideSettings) {
+  async function handleRecreateSchedule(overrideSettings, overrideWindows, overrideMode, overrideDuration) {
     const toUse = overrideSettings || settings;
+    const windowsToUse = overrideWindows || freeTimeWindows;
+    const modeToUse = overrideMode || sessionLengthMode;
+    const durationToUse = overrideDuration || (modeToUse === 'manual' ? sessionDuration : initialSessionDuration);
     setIsRecreatingSchedule(true);
     setScheduleSuccessMsg(false);
     try {
@@ -602,11 +605,11 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: sessionLengthMode,
-            session_length_mode: sessionLengthMode,
-            initial_session_duration: initialSessionDuration,
-            session_duration: sessionDuration,
-            free_time_windows: freeTimeWindows,
+            mode: modeToUse,
+            session_length_mode: modeToUse,
+            initial_session_duration: modeToUse === 'ai_optimized' ? durationToUse : initialSessionDuration,
+            session_duration: modeToUse === 'manual' ? durationToUse : sessionDuration,
+            free_time_windows: windowsToUse,
             custom_slots: [],
             subject_priorities: toUse.subject_priorities,
             exam_dates: toUse.exam_dates,
@@ -653,7 +656,8 @@ export default function App() {
           daily_minutes: Number(toSave.daily_minutes),
           retention_threshold: Number(toSave.retention_threshold),
           subject_priorities: toSave.subject_priorities,
-          exam_dates: toSave.exam_dates
+          exam_dates: toSave.exam_dates,
+          free_time_windows: freeTimeWindows
         };
         const res = await fetch(`${API_BASE}/settings`, {
           method: 'PUT',
@@ -1602,6 +1606,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setTodayPlan(data);
+        if (data.free_time_windows && Array.isArray(data.free_time_windows) && data.free_time_windows.length > 0) {
+          setFreeTimeWindows(data.free_time_windows);
+        }
       }
     } catch (e) {
       console.warn(e);
@@ -1764,52 +1771,59 @@ export default function App() {
       end: newWindowEnd,
       label: newWindowLabel.trim() || 'Study Window'
     };
-    setFreeTimeWindows(prev => [...prev, newWin]);
+    const updated = [...freeTimeWindows, newWin];
+    setFreeTimeWindows(updated);
     setShowAddWindow(false);
+    handleRecreateSchedule(undefined, updated);
   }
 
   function handleRemoveFreeTimeWindow(winId) {
-    setFreeTimeWindows(prev => prev.filter(w => w.id !== winId));
+    const updated = freeTimeWindows.filter(w => w.id !== winId);
+    setFreeTimeWindows(updated);
+    handleRecreateSchedule(undefined, updated);
   }
 
   function handleMoveWindowUp(index) {
     if (index <= 0) return;
-    setFreeTimeWindows(prev => {
-      const next = [...prev];
-      const temp = next[index - 1];
-      next[index - 1] = next[index];
-      next[index] = temp;
-      return next;
-    });
+    const next = [...freeTimeWindows];
+    const temp = next[index - 1];
+    next[index - 1] = next[index];
+    next[index] = temp;
+    setFreeTimeWindows(next);
+    handleRecreateSchedule(undefined, next);
   }
 
   function handleMoveWindowDown(index) {
     if (index >= freeTimeWindows.length - 1) return;
-    setFreeTimeWindows(prev => {
-      const next = [...prev];
-      const temp = next[index + 1];
-      next[index + 1] = next[index];
-      next[index] = temp;
-      return next;
-    });
+    const next = [...freeTimeWindows];
+    const temp = next[index + 1];
+    next[index + 1] = next[index];
+    next[index] = temp;
+    setFreeTimeWindows(next);
+    handleRecreateSchedule(undefined, next);
   }
 
   function handleApplyWindowPreset(presetType) {
+    let preset = [];
     if (presetType === 'morning_evening') {
-      setFreeTimeWindows([
+      preset = [
         { id: 'win-1', start: '07:00', end: '08:30', label: 'Morning High Focus' },
         { id: 'win-2', start: '20:00', end: '21:30', label: 'Evening Review' }
-      ]);
+      ];
     } else if (presetType === 'afternoon') {
-      setFreeTimeWindows([
+      preset = [
         { id: 'win-aft', start: '14:00', end: '16:00', label: 'Afternoon Deep Work' }
-      ]);
+      ];
     } else if (presetType === 'full_academic') {
-      setFreeTimeWindows([
+      preset = [
         { id: 'win-ac1', start: '08:00', end: '10:00', label: 'Morning Deep Work' },
         { id: 'win-ac2', start: '15:00', end: '17:00', label: 'Afternoon Focus' },
         { id: 'win-ac3', start: '20:30', end: '22:00', label: 'Evening Session' }
-      ]);
+      ];
+    }
+    if (preset.length > 0) {
+      setFreeTimeWindows(preset);
+      handleRecreateSchedule(undefined, preset);
     }
   }
 
@@ -1838,17 +1852,27 @@ export default function App() {
 
   const planSchedule = useMemo(() => {
     if (todayPlan && Array.isArray(todayPlan.tiles) && todayPlan.tiles.length > 0) {
-      const hydratedTiles = todayPlan.tiles.map(t => ({
-        ...t,
-        is_completed: completedTileIds.has(t.id) || t.is_completed,
-        status: (completedTileIds.has(t.id) || t.is_completed) ? 'completed' : 'ready'
-      }));
-      return {
-        ...todayPlan,
-        session_duration: todayPlan.session_duration || sessionDuration,
-        tiles: hydratedTiles,
-        strips: hydratedTiles
-      };
+      const planWindows = todayPlan.free_time_windows || [];
+      const windowsMatch = planWindows.length === freeTimeWindows.length &&
+        planWindows.every((pw, idx) => pw.start === freeTimeWindows[idx]?.start && pw.end === freeTimeWindows[idx]?.end);
+      if (windowsMatch || planWindows.length === 0) {
+        const sortedTiles = [...todayPlan.tiles].sort((a, b) => {
+          const aM = a.start_mins !== undefined ? a.start_mins : parseTimeToMinutes(a.start_time);
+          const bM = b.start_mins !== undefined ? b.start_mins : parseTimeToMinutes(b.start_time);
+          return aM - bM;
+        });
+        const hydratedTiles = sortedTiles.map(t => ({
+          ...t,
+          is_completed: completedTileIds.has(t.id) || t.is_completed,
+          status: (completedTileIds.has(t.id) || t.is_completed) ? 'completed' : 'ready'
+        }));
+        return {
+          ...todayPlan,
+          session_duration: todayPlan.session_duration || sessionDuration,
+          tiles: hydratedTiles,
+          strips: hydratedTiles
+        };
+      }
     }
 
     const prioEntries = Object.entries(settings.subject_priorities || {}).filter(([s, p]) => Number(p) > 0);
@@ -2030,8 +2054,8 @@ export default function App() {
       const urgencyTxt = (chosenConcept?.p_hat || 0.8) < 0.50
         ? `Critical memory decay (${pPct}% recall, h=${chosenConcept?.half_life_days || 1}d)`
         : chosenConcept?.is_due
-        ? `Due for active recall review (${pPct}% retention threshold)`
-        : `Sustained memory consolidation (${pPct}% recall)`;
+          ? `Due for active recall review (${pPct}% retention threshold)`
+          : `Sustained memory consolidation (${pPct}% recall)`;
 
       tiles.push({
         id: tileId,
@@ -2058,6 +2082,16 @@ export default function App() {
         is_completed: completedTileIds.has(tileId),
         status: completedTileIds.has(tileId) ? 'completed' : 'ready'
       });
+    });
+
+    // Sort tiles chronologically so the earliest session is at the top
+    tiles.sort((a, b) => {
+      const aM = a.start_mins !== undefined ? a.start_mins : parseTimeToMinutes(a.start_time);
+      const bM = b.start_mins !== undefined ? b.start_mins : parseTimeToMinutes(b.start_time);
+      return aM - bM;
+    });
+    tiles.forEach((t, idx) => {
+      t.id = `tile-${idx + 1}`;
     });
 
     // 4. Construct Blocks for backward compatibility
@@ -2211,7 +2245,7 @@ export default function App() {
 
   async function finishQuizSession() {
     const testedConceptIds = [...new Set(quizSession.sessionResults.map(r => r.concept_id))];
-    
+
     setConcepts(prev => prev.map(c => {
       if (!testedConceptIds.includes(c.id)) return c;
       const attempts = quizSession.sessionResults.filter(r => r.concept_id === c.id);
@@ -4140,17 +4174,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Grounding Info Banner */}
-                <div style={{ padding: '7px 14px', background: '#f5f9f6', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--mint-dark)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <FileCheck size={13} />
-                    <span>Active Sources: <b>{subjectMaterials[0]?.title || `${chatSubject} Notes`}</b> ({subjectMaterials.length} files)</span>
-                  </div>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--muted)' }}>
-                    Referenced in all answers
-                  </span>
-                </div>
-
                 {/* Chat Feed */}
                 <div className="chat-feed" style={{ flex: 1, overflowY: 'auto' }}>
                   {chatMessages.map((msg, idx) => (
@@ -4766,7 +4789,7 @@ export default function App() {
                             />
                             <circle cx={simX} cy={simY} r="7" fill="#ffffff" stroke="var(--mint-dark)" strokeWidth="2.5" />
                             <circle cx={simX} cy={simY} r="3" fill="var(--mint-dark)" />
-                            
+
                             {/* Scrubber Badge */}
                             <g transform={`translate(${Math.min(padL + plotW - 90, Math.max(padL + 10, simX - 45))}, ${Math.max(padT + 5, simY - 32)})`}>
                               <rect x="0" y="0" width="90" height="22" rx="3" fill="var(--ink)" />

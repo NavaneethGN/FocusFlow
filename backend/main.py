@@ -166,6 +166,10 @@ class UserSettings(BaseModel):
     }
     gemini_configured: bool = False
     gemini_api_key: Optional[str] = None
+    free_time_windows: Optional[List[Dict[str, Any]]] = None
+    session_length_mode: Optional[str] = "ai_optimized"
+    session_duration: Optional[int] = 30
+    initial_session_duration: Optional[int] = 30
 
 # ---------------------------------------------------------------------------
 # In-Memory Database Seed
@@ -1515,9 +1519,9 @@ def build_adaptive_tile_schedule(
         }
 
     if not free_time_windows:
-        free_time_windows = [
-            {"id": "win-1", "start": "07:30", "end": "09:00", "label": "Morning Focus"},
-            {"id": "win-2", "start": "20:00", "end": "21:30", "label": "Evening Review"},
+        free_time_windows = getattr(settings, "free_time_windows", None) or [
+            {"id": "win-1", "start": "07:00", "end": "08:30", "label": "Morning Focus"},
+            {"id": "win-2", "start": "20:00", "end": "22:00", "label": "Evening Review"},
         ]
 
     # Automated session slicing across availability windows
@@ -1715,6 +1719,8 @@ def build_adaptive_tile_schedule(
 
             tiles.append({
                 "id": f"tile-{idx + 1}",
+                "start_mins": slot.get("start_mins", parse_time_to_minutes(slot.get("start_time", "00:00"))),
+                "end_mins": slot.get("end_mins", parse_time_to_minutes(slot.get("end_time", "00:00"))),
                 "time_slot": slot["time_slot"],
                 "time_slot_formatted": slot.get("time_slot_formatted"),
                 "start_time": slot["start_time"],
@@ -1738,6 +1744,11 @@ def build_adaptive_tile_schedule(
                 "status": "ready",
                 "is_completed": False,
             })
+
+    # Sort tiles in chronological order: earliest session at the top
+    tiles.sort(key=lambda t: t.get("start_mins") if t.get("start_mins") is not None else parse_time_to_minutes(t.get("start_time", "00:00")))
+    for idx, t in enumerate(tiles):
+        t["id"] = f"tile-{idx + 1}" if not t["id"].startswith("tile-manual-") else t["id"]
 
     blocks = []
     total_scheduled = sum(t["duration_minutes"] for t in tiles)
@@ -1811,6 +1822,11 @@ def get_today_plan(
     2. Supports Session Length Optimization: Manual vs AI-Optimized (fixes optimal duration from quiz performance).
     3. Routes urgent subjects and maps specific weak topics with exact timestamps.
     """
+    eff_mode = session_length_mode or getattr(db_settings, "session_length_mode", mode)
+    eff_initial_dur = initial_session_duration or getattr(db_settings, "initial_session_duration", None)
+    eff_dur = session_duration if session_duration != 30 else (getattr(db_settings, "session_duration", 30) or 30)
+    windows = getattr(db_settings, "free_time_windows", None)
+
     if user_id is not None:
         res = plan.get_today_plan(user_id=user_id, db=db)
         if hasattr(res, "model_dump"):
@@ -1826,10 +1842,11 @@ def get_today_plan(
                 raw_questions=db_questions,
                 settings=db_settings,
                 mode=mode,
-                session_duration=session_duration,
-                session_length_mode=session_length_mode,
-                initial_session_duration=initial_session_duration,
+                session_duration=eff_dur,
+                session_length_mode=eff_mode,
+                initial_session_duration=eff_initial_dur,
                 anchor_time=anchor_time,
+                free_time_windows=windows,
             )
             res_dict["tiles"] = sched["tiles"]
             res_dict["strips"] = sched["strips"]
@@ -1849,10 +1866,11 @@ def get_today_plan(
         raw_questions=db_questions,
         settings=db_settings,
         mode=mode,
-        session_duration=session_duration,
-        session_length_mode=session_length_mode,
-        initial_session_duration=initial_session_duration,
+        session_duration=eff_dur,
+        session_length_mode=eff_mode,
+        initial_session_duration=eff_initial_dur,
         anchor_time=anchor_time,
+        free_time_windows=windows,
     )
 
 
@@ -1867,6 +1885,15 @@ def generate_custom_schedule(req: Dict[str, Any], db: Session = Depends(get_db))
     anchor_time = req.get("anchor_time", "07:30 AM")
     free_time_windows = req.get("free_time_windows", [])
     custom_slots = req.get("custom_slots", [])
+
+    if "free_time_windows" in req and req["free_time_windows"] is not None:
+        db_settings.free_time_windows = list(req["free_time_windows"])
+    if "session_length_mode" in req and req["session_length_mode"] is not None:
+        db_settings.session_length_mode = req["session_length_mode"]
+    if "session_duration" in req and req["session_duration"] is not None:
+        db_settings.session_duration = int(req["session_duration"])
+    if "initial_session_duration" in req and req["initial_session_duration"] is not None:
+        db_settings.initial_session_duration = int(req["initial_session_duration"])
 
     if "subject_priorities" in req and isinstance(req["subject_priorities"], dict):
         db_settings.subject_priorities = dict(req["subject_priorities"])
@@ -2303,6 +2330,8 @@ def update_settings(settings_payload: Dict[str, Any], user_id: Optional[int] = N
                 ensure_subject_concepts(subj, db=db)
     if "exam_dates" in settings_payload and isinstance(settings_payload["exam_dates"], dict):
         db_settings.exam_dates.update(settings_payload["exam_dates"])
+    if "free_time_windows" in settings_payload and isinstance(settings_payload["free_time_windows"], list):
+        db_settings.free_time_windows = list(settings_payload["free_time_windows"])
 
     k = settings.get_gemini_api_key()
     db_settings.gemini_configured = bool(k and len(k) > 5)
